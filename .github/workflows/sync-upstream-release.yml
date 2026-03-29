@@ -1,0 +1,53 @@
+name: Sync Upstream Release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Fetch latest official PicoClaw release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest_tag="$(
+            gh api repos/sipeed/picoclaw/releases/latest --jq '.tag_name'
+          )"
+          current_tag="$(sed -n 's/^  PICOCLAW_VERSION: //p' picoclaw/build.yaml)"
+          echo "latest=${latest_tag}" >> "${GITHUB_OUTPUT}"
+          echo "current=${current_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Stop when already current
+        if: steps.upstream.outputs.latest == steps.upstream.outputs.current
+        run: echo "Already tracking ${{ steps.upstream.outputs.current }}"
+
+      - name: Update wrapper to new upstream version
+        if: steps.upstream.outputs.latest != steps.upstream.outputs.current
+        run: sh scripts/set-version.sh "${{ steps.upstream.outputs.latest }}"
+
+      - name: Create update pull request
+        if: steps.upstream.outputs.latest != steps.upstream.outputs.current
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore: track PicoClaw ${{ steps.upstream.outputs.latest }}"
+          title: "Track PicoClaw ${{ steps.upstream.outputs.latest }}"
+          body: |
+            Automated update to the latest official `sipeed/picoclaw` release.
+
+            Changes:
+            - updates the upstream build tag in `picoclaw/build.yaml`
+            - updates the Home Assistant add-on version in `picoclaw/config.yaml`
+          branch: codex/sync-picoclaw-${{ steps.upstream.outputs.latest }}
+          delete-branch: true

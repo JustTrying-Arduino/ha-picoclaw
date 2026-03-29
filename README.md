@@ -1,168 +1,205 @@
 # PicoClaw for Home Assistant
 
-Bring the official [PicoClaw](https://github.com/sipeed/picoclaw) experience into Home Assistant without turning this repository into a long-lived fork.
+Run [PicoClaw](https://github.com/sipeed/picoclaw) — an open-source AI agent runtime — directly inside Home Assistant as a native add-on.
 
-This project rebuilds PicoClaw as a thin Home Assistant add-on wrapper around the official `sipeed/picoclaw` release tags. The goal is simple:
+**One click to install, one JSON to configure, everything accessible from the HA sidebar.**
 
-- keep PicoClaw itself upstream
-- make it feel natural inside Home Assistant
-- expose a real editable workspace
-- keep the wrapper small enough to survive upstream changes
+![PicoClaw launcher UI inside Home Assistant](picoclaw/assets/launcher-webui.jpg)
 
-## Why This Repository Exists
+---
 
-PicoClaw is an ambitious personal AI agent project with its own launcher, gateway, workspace model, and fast-moving runtime. Home Assistant users want that power too, but with Home Assistant ergonomics:
+## Table of Contents
 
-- installable as a normal add-on
-- reachable from the sidebar through Ingress
-- editable from File Editor or Samba
-- persistent across restarts
-- updateable through a predictable HA release flow
+- [Why This Add-on](#why-this-add-on)
+- [Quick Start](#quick-start)
+  - [Install](#install)
+  - [Configure](#configure)
+  - [Use](#use)
+- [Configuration Examples](#configuration-examples)
+  - [Minimal (OpenAI)](#minimal-openai)
+  - [With MCP and Home Assistant](#with-mcp-and-home-assistant)
+  - [Full Example](#full-example)
+- [What the Wrapper Does for You](#what-the-wrapper-does-for-you)
+  - [Accessible UI via Ingress](#accessible-ui-via-ingress)
+  - [Accessible Files via /share](#accessible-files-via-share)
+  - [Smart Config Defaults](#smart-config-defaults)
+- [Debugging](#debugging)
+- [Architecture](#architecture)
+  - [Design Philosophy](#design-philosophy)
+  - [Storage Layout](#storage-layout)
+  - [Repository Structure](#repository-structure)
+- [Learn More](#learn-more)
 
-This repository is the bridge between those two worlds.
+---
 
-## The HA <-> PicoClaw Link
+## Why This Add-on
 
-Home Assistant is the host and UX shell.
-PicoClaw is the actual agent runtime.
+PicoClaw is a powerful AI agent runtime: chat interface, gateway, skills, tools, MCP support. But installing it standalone means managing Docker, ports, config files, and persistence manually.
 
-This repo does not try to reimplement PicoClaw logic. Instead, it adapts the official upstream release into a Home Assistant add-on contract:
+This add-on gives you all of that with Home Assistant ergonomics:
 
-- Home Assistant owns add-on packaging, startup, storage mapping, ingress, and updates
-- PicoClaw owns agent behavior, launcher behavior, gateway behavior, models, tools, and runtime semantics
+| Feature | Standalone PicoClaw | This Add-on |
+|---|---|---|
+| Install | Manual Docker setup | One-click from the HA add-on store |
+| UI access | `http://host:18800` | HA sidebar via Ingress |
+| Configuration | Edit JSON files manually | Paste JSON in the HA add-on config tab |
+| Agent workspace | Wherever you mount it | `/share/picoclaw/workspace` — editable from File Editor, Samba, SSH |
+| Persistence | You manage volumes | Automatic across restarts and updates |
+| Updates | Pull images manually | Tracked automatically via GitHub Actions |
 
-That split is intentional. The thinner the wrapper stays, the easier it is to track upstream safely.
+---
 
-## Source of Truth
+## Quick Start
 
-The source of PicoClaw in this repository is the official upstream project:
+### Install
 
-- Upstream repo: [sipeed/picoclaw](https://github.com/sipeed/picoclaw)
-- Upstream releases: [GitHub Releases](https://github.com/sipeed/picoclaw/releases)
+1. Go to **Settings > Add-ons > Add-on Store**
+2. Click **...** (top right) > **Repositories** and add:
+   ```
+   https://github.com/JustTrying-Arduino/ha-picoclaw
+   ```
+3. Refresh, find **PicoClaw**, click **Install**
 
-This repository follows upstream release tags only. It does not track `main`, does not vendor the entire upstream repository, and does not depend on random community images.
+### Configure
 
-## What Has Been Implemented Here
+1. Open the add-on **Configuration** tab
+2. Paste your JSON config into `raw_json_config` (see [examples below](#configuration-examples))
+3. Click **Save**
 
-The repository now contains a full Home Assistant add-on rebuild in [`picoclaw/`](picoclaw/):
+### Use
 
-- `repository.yaml` so Home Assistant can consume the repository
-- a real add-on manifest, Dockerfile, startup script, docs, translations, icon, and logo
-- build logic that compiles `picoclaw`, `picoclaw-launcher`, and `picoclaw-launcher-tui` from an official upstream tag
-- a split storage model:
-  `/share/picoclaw/workspace` for user files
-  `/data/picoclaw` for runtime state
-- a single Home Assistant option:
-  `raw_json_config`
-- startup validation that rejects invalid JSON early and writes the normalized config to `/data/picoclaw/config.json`
-- a deterministic workspace contract that always forces PicoClaw onto `/share/picoclaw/workspace`
-- HA-safe file and skill tools injected by default when the user config omits them
-- Home Assistant Ingress as the primary UI via `picoclaw-launcher`
-- English-first launcher defaults with a very small HA-specific patch set
-- optional `.security.yml` compatibility without making it mandatory for first boot
-- GitHub Actions for CI, image publishing, and upstream release tracking
+1. **Start** the add-on
+2. Click **Open Web UI** (or use the sidebar entry)
+3. Configure your model/credentials in the launcher UI
+4. Click **Start Gateway** and start chatting
 
-## Install in Home Assistant
+---
 
-1. Open Home Assistant and go to the add-on store.
-   On recent versions this is usually `Settings -> Add-ons -> Add-on Store`.
-2. Add this repository as a custom add-on repository:
-   `https://github.com/JustTrying-Arduino/ha-picoclaw`
-3. Refresh the store, open `PicoClaw`, and install it.
-4. After install, open the add-on configuration and fill `raw_json_config`.
-5. Start the add-on.
-6. Open the UI with the add-on's `Open Web UI` button or through the Home Assistant sidebar entry exposed by Ingress.
+## Configuration Examples
 
-By default, Home Assistant can build the add-on image directly from this repository's `Dockerfile`. That is useful while GHCR publication is not set up yet or if the registry package is still private.
+The add-on exposes a single option: `raw_json_config`. Paste a PicoClaw JSON object, and the wrapper handles the rest.
 
-The Home Assistant developer docs explain the custom repository flow here:
-[Create an app repository](https://developers.home-assistant.io/docs/add-ons/repository).
+> You don't need to specify workspace paths, file tools, or skill tools — the wrapper injects them automatically if missing.
 
-## Configure It
+### Minimal (OpenAI)
 
-This add-on intentionally exposes one Home Assistant option only:
+The smallest config to get started:
 
-- `raw_json_config`
+```json
+{
+  "agents": {
+    "defaults": {
+      "model_name": "gpt-4o",
+      "restrict_to_workspace": true
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "gpt-4o",
+      "model": "openai/gpt-4o",
+      "api_key": "sk-your-openai-key",
+      "api_base": "https://api.openai.com/v1"
+    }
+  ]
+}
+```
 
-You paste the full PicoClaw JSON configuration into that field, and the wrapper will:
+That's it. The wrapper auto-enables file tools, skill tools, and sets sane gateway defaults.
 
-- validate that it is valid JSON
-- require it to be a JSON object
-- write it to `/data/picoclaw/config.json`
-- force `agents.defaults.workspace` to `/share/picoclaw/workspace`
+### With MCP and Home Assistant
 
-That means Home Assistant remains the config entry point, while PicoClaw keeps its native JSON config model.
+Connect PicoClaw to Home Assistant's own MCP server so the agent can control your smart home:
 
-The wrapper also injects the core file and skill tools Home Assistant users expect when they are absent from the raw JSON, so a minimal config still results in a usable workspace-aware agent.
+```json
+{
+  "agents": {
+    "defaults": {
+      "model_name": "gpt-4o",
+      "restrict_to_workspace": true,
+      "max_tokens": 8192
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "gpt-4o",
+      "model": "openai/gpt-4o",
+      "api_key": "sk-your-openai-key",
+      "api_base": "https://api.openai.com/v1"
+    }
+  ],
+  "tools": {
+    "exec": { "enabled": true, "enable_deny_patterns": true },
+    "web": { "enabled": true },
+    "mcp": {
+      "enabled": true,
+      "servers": {
+        "home-assistant": {
+          "enabled": true,
+          "type": "http",
+          "url": "http://homeassistant:8123/api/mcp",
+          "headers": {
+            "Authorization": "Bearer YOUR_LONG_LIVED_ACCESS_TOKEN"
+          }
+        }
+      }
+    }
+  }
+}
+```
 
-If you want a quick starting point, use:
+> Replace `YOUR_LONG_LIVED_ACCESS_TOKEN` with a token from **Profile > Long-Lived Access Tokens** in HA.
 
-- [`picoclaw/examples/raw_json_config.example.json`](picoclaw/examples/raw_json_config.example.json)
+### Full Example
 
-If you want the full operational details, read:
+See [`picoclaw/examples/raw_json_config.example.json`](picoclaw/examples/raw_json_config.example.json) for a complete configuration with all tools explicitly enabled, MCP pre-configured, and debug logging.
 
-- [`picoclaw/DOCS.md`](picoclaw/DOCS.md)
+---
 
-## Access the UI
+## What the Wrapper Does for You
 
-The primary interface is the upstream `picoclaw-launcher`, exposed through Home Assistant Ingress.
+### Accessible UI via Ingress
 
-In practice:
+The full PicoClaw launcher UI runs inside Home Assistant through Ingress — no port forwarding needed:
 
-- start the add-on
-- click `Open Web UI` from the add-on page
-- optionally pin the add-on in the Home Assistant sidebar for direct access
+- Model and credentials configuration
+- Channel setup (Telegram, etc.)
+- Gateway control (start/stop/status)
+- Built-in chat interface
+- Raw config editor, logs, tools, and skills management
 
-This repository does not expose host ports by default. Home Assistant handles the embedded UI path through Ingress, which is exactly the experience add-ons are meant to provide.
-The launcher should be treated as an Ingress app first. `http://<host>:18800/` is not part of the stable add-on contract unless a host port is explicitly published later.
+Open it from the add-on page (**Open Web UI**) or pin it to the HA sidebar for one-click access.
 
-Background on Ingress:
-[Presenting your addon](https://developers.home-assistant.io/docs/add-ons/presentation)
+### Accessible Files via /share
 
-## Configuration UI Inside Home Assistant
+The agent workspace lives at `/share/picoclaw/workspace`. This means you can browse and edit all agent files directly from Home Assistant:
 
-The full PicoClaw launcher UI is available directly inside Home Assistant through Ingress, including:
+- **File Editor add-on** — edit `USER.md`, skills, memory files from the browser
+- **Samba add-on** — access the workspace from your computer's file explorer
+- **SSH** — full shell access to the workspace
 
-- model and provider configuration
-- credentials management
-- channel configuration such as Telegram
-- agent, tools, services, logs, and raw config pages
+On first boot, the wrapper populates the workspace with PicoClaw's standard template files (`USER.md`, `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `HEARTBEAT.md`, etc.) and builtin skills. Existing files are never overwritten.
 
-Typical flow inside the UI:
+### Smart Config Defaults
 
-1. open `Models` or `Credentials` to configure your provider and API key
-2. open `Channels` to enable and configure Telegram or another channel
-3. click `Start Gateway`
-4. chat from the built-in launcher interface
+Every time the add-on starts, the wrapper normalizes your JSON:
 
-![PicoClaw launcher UI available inside Home Assistant](picoclaw/assets/launcher-webui.jpg)
+| Setting | Behavior |
+|---|---|
+| `agents.defaults.workspace` | Forced to `/share/picoclaw/workspace` |
+| `gateway.host` | Defaults to `127.0.0.1` if absent |
+| `gateway.port` | Defaults to `18790` if absent |
+| `tools.web.prefer_native` | Defaults to `false` if absent |
+| File tools (`list_dir`, `read_file`, `write_file`, `append_file`, `edit_file`) | Auto-enabled if absent |
+| Skill tools (`skills`, `find_skills`, `install_skill`) | Auto-enabled if absent |
+| `version` | Forced to `1` |
 
-Screenshot source: official upstream PicoClaw launcher UI from [`sipeed/picoclaw`](https://github.com/sipeed/picoclaw).
+Invalid JSON is rejected at startup with a clear error — the add-on fails fast instead of launching broken.
 
-## Where Files Live
+---
 
-Editable workspace:
+## Debugging
 
-- `/share/picoclaw/workspace`
-
-Runtime state:
-
-- `/data/picoclaw/config.json`
-- `/data/picoclaw/.security.yml`
-- `/data/picoclaw/launcher-config.json`
-- `/data/picoclaw/logs`
-
-This split is deliberate:
-
-- `/share` is for files you want to edit from File Editor or Samba
-- `/data` is for runtime state the add-on should keep to itself
-
-Once PicoClaw has initialized, the shared workspace should contain files such as `USER.md`, `HEARTBEAT.md`, `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, plus `skills/`, `memory/`, `sessions/`, and `state/`.
-
-Builtin skills are copied into `/share/picoclaw/workspace/skills` on first boot so they are visible from Home Assistant File Editor. If you want to disable one, remove its folder from that shared `skills/` directory.
-The wrapper also bootstraps the standard top-level workspace files there, so files like `USER.md`, `HEARTBEAT.md`, `TOOLS.md`, `AGENTS.md`, `SOUL.md`, and `IDENTITY.md` are visible from Home Assistant too.
-
-For troubleshooting, you can enable detailed gateway logging with:
+Add this to your `raw_json_config` and restart:
 
 ```json
 {
@@ -172,76 +209,72 @@ For troubleshooting, you can enable detailed gateway logging with:
 }
 ```
 
-In this wrapper that does two things at once:
+This enables verbose logging in the HA add-on logs: gateway traffic, tool calls, prompts, and non-truncated output.
 
-- it sets the upstream gateway log level to `debug`
-- it makes the launcher start the gateway with `-d --no-truncate`, so detailed logs also appear in the Home Assistant add-on logs
+For optional security configuration, place a `.security.yml` file in `/share/picoclaw/` — the wrapper copies it to the runtime directory at each startup.
 
-## Good Sources for Going Further
+---
 
-For Home Assistant:
+## Architecture
 
-- Custom add-on repositories:
-  [Home Assistant Developer Docs](https://developers.home-assistant.io/docs/add-ons/repository)
-- Add-on presentation and Ingress:
-  [Home Assistant Developer Docs](https://developers.home-assistant.io/docs/add-ons/presentation)
-- Add-on communication on the internal HA network:
-  [Home Assistant Developer Docs](https://developers.home-assistant.io/docs/add-ons/communication/)
+### Design Philosophy
 
-For PicoClaw itself:
+**This is a wrapper, not a fork.**
 
-- Project home:
-  [docs.picoclaw.io](https://docs.picoclaw.io/)
-- Getting started:
-  [Getting Started](https://docs.picoclaw.io/docs/getting-started/)
-- Full JSON reference:
-  [Full Configuration Reference](https://docs.picoclaw.io/docs/configuration/config-reference/)
-- Model configuration:
-  [Model Configuration](https://docs.picoclaw.io/docs/configuration/model-list/)
-- Tools and MCP:
-  [Tools Configuration](https://docs.picoclaw.io/docs/configuration/tools/)
-- Sandbox behavior:
-  [Security Sandbox](https://docs.picoclaw.io/docs/configuration/security-sandbox/)
+- Home Assistant owns: add-on packaging, storage, ingress, config validation, release automation
+- PicoClaw owns: agent behavior, launcher, gateway, models, tools, MCP, channels
 
-## Design Philosophy
+The wrapper applies a single small patch on the upstream code (for Ingress compatibility and English defaults). Everything else is upstream `sipeed/picoclaw` built from official release tags.
 
-This is a wrapper, not a fork.
+### Storage Layout
 
-That means HA-specific behavior lives here:
+```
+/share/picoclaw/                  <-- Editable (File Editor, Samba, SSH)
+  workspace/                      <-- Agent workspace (USER.md, skills/, memory/, sessions/, etc.)
+  .security.yml                   <-- Optional, copied to runtime at startup
 
-- filesystem layout
-- validation and startup
-- ingress compatibility
-- release automation
-- polish for HA users
+/data/picoclaw/                   <-- Managed by the add-on (not user-facing)
+  config.json                     <-- Normalized config (written each boot)
+  launcher-config.json            <-- Launcher port config
+  workspace -> /share/...         <-- Symlink to shared workspace
+```
 
-And PicoClaw-specific behavior stays upstream:
+### Repository Structure
 
-- launcher internals
-- gateway internals
-- model behavior
-- tools, MCP, and channel runtime
-- rapid feature evolution
+```
+repository.yaml                   # HA add-on repo metadata
+scripts/set-version.sh            # Bump upstream + wrapper versions
+.github/workflows/
+  ci.yml                          # YAML/JSON validation, smoke test
+  publish.yml                     # Multi-arch build + push to GHCR
+  sync-upstream-release.yml       # Weekly check for new upstream releases
+picoclaw/
+  config.yaml                     # Add-on manifest
+  build.yaml                      # Build versions and base images
+  Dockerfile                      # Multi-stage build (Go + Alpine)
+  run.sh                          # Entrypoint: validation, normalization, launch
+  patches/                        # Ingress + English defaults patch
+  DOCS.md                         # Full operational documentation
+```
 
-## Why It Should Feel Better in Home Assistant
+---
 
-The add-on is built around the practical pain points Home Assistant users hit first:
+## Learn More
 
-- the workspace is visible in `/share`, so editing files is easy
-- runtime clutter stays under `/data`
-- the launcher opens through Ingress instead of asking users to manage host ports
-- the config surface stays minimal instead of exploding into dozens of HA-specific knobs
-- upstream compatibility stays high because the wrapper keeps its patch set small
+**PicoClaw upstream:**
+- [Documentation](https://docs.picoclaw.io/)
+- [Getting Started](https://docs.picoclaw.io/docs/getting-started/)
+- [Configuration Reference](https://docs.picoclaw.io/docs/configuration/config-reference/)
+- [Model Configuration](https://docs.picoclaw.io/docs/configuration/model-list/)
+- [Tools & MCP](https://docs.picoclaw.io/docs/configuration/tools/)
+- [Security Sandbox](https://docs.picoclaw.io/docs/configuration/security-sandbox/)
 
-## Repository Layout
+**Home Assistant:**
+- [Custom Add-on Repositories](https://developers.home-assistant.io/docs/add-ons/repository)
+- [Add-on Ingress](https://developers.home-assistant.io/docs/add-ons/presentation)
+- [Add-on Communication](https://developers.home-assistant.io/docs/add-ons/communication/)
 
-- [`picoclaw/`](picoclaw/) contains the add-on
-- [`picoclaw/DOCS.md`](picoclaw/DOCS.md) contains the operational contract
-- [`.github/workflows/`](.github/workflows/) contains CI, publishing, and upstream-sync automation
-- [`scripts/set-version.sh`](scripts/set-version.sh) updates the wrapper version to follow a new upstream tag
-
-## Current Positioning
-
-If you want the official PicoClaw runtime, but with a Home Assistant-native install and workflow, that is exactly what this repository is for.
-
-If you want a deep PicoClaw fork with HA-specific runtime features welded into the agent itself, that is intentionally not what this repository does.
+**This project:**
+- [Full operational docs](picoclaw/DOCS.md)
+- [Example configuration](picoclaw/examples/raw_json_config.example.json)
+- [Upstream source](https://github.com/sipeed/picoclaw)

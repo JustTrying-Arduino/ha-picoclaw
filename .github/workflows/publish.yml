@@ -1,0 +1,73 @@
+name: Publish Images
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish.yml
+      - picoclaw/**
+      - scripts/set-version.sh
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            build_from: ghcr.io/home-assistant/amd64-base:3.22
+          - arch: aarch64
+            platform: linux/arm64
+            build_from: ghcr.io/home-assistant/aarch64-base:3.22
+          - arch: armv7
+            platform: linux/arm/v7
+            build_from: ghcr.io/home-assistant/armv7-base:3.22
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Extract add-on version
+        id: versions
+        run: |
+          version="$(sed -n 's/^version: //p' picoclaw/config.yaml)"
+          upstream="$(sed -n 's/^  PICOCLAW_VERSION: //p' picoclaw/build.yaml)"
+          wrapper="$(sed -n 's/^  PICOCLAW_WRAPPER_VERSION: //p' picoclaw/build.yaml)"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "upstream=${upstream}" >> "${GITHUB_OUTPUT}"
+          echo "wrapper=${wrapper}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: picoclaw
+          platforms: ${{ matrix.platform }}
+          push: true
+          build-args: |
+            BUILD_FROM=${{ matrix.build_from }}
+            PICOCLAW_VERSION=${{ steps.versions.outputs.upstream }}
+            PICOCLAW_WRAPPER_VERSION=${{ steps.versions.outputs.wrapper }}
+          tags: |
+            ghcr.io/justtrying-arduino/${{ matrix.arch }}-picoclaw-ha:${{ steps.versions.outputs.version }}
+            ghcr.io/justtrying-arduino/${{ matrix.arch }}-picoclaw-ha:latest

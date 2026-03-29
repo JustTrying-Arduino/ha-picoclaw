@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate-and-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate YAML syntax
+        run: |
+          ruby -e '
+            require "yaml"
+            %w[
+              repository.yaml
+              picoclaw/build.yaml
+              picoclaw/config.yaml
+              picoclaw/translations/en.yaml
+            ].each do |path|
+              YAML.load_file(path, permitted_classes: [], aliases: false)
+            end
+          '
+
+      - name: Extract Docker build arguments
+        id: build_args
+        run: |
+          echo "upstream=$(sed -n 's/^  PICOCLAW_VERSION: //p' picoclaw/build.yaml)" >> "${GITHUB_OUTPUT}"
+          echo "wrapper=$(sed -n 's/^  PICOCLAW_WRAPPER_VERSION: //p' picoclaw/build.yaml)" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate example JSON
+        run: jq -e 'type == "object"' picoclaw/examples/raw_json_config.example.json
+
+      - name: Validate shell syntax
+        run: bash -n picoclaw/run.sh scripts/set-version.sh
+
+      - name: Build amd64 smoke image
+        run: |
+          docker build \
+            --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.22 \
+            --build-arg PICOCLAW_VERSION=${{ steps.build_args.outputs.upstream }} \
+            --build-arg PICOCLAW_WRAPPER_VERSION=${{ steps.build_args.outputs.wrapper }} \
+            --tag picoclaw-addon-smoke:latest \
+            picoclaw
+
+      - name: Run add-on smoke test
+        run: |
+          mkdir -p /tmp/picoclaw-data /tmp/picoclaw-share
+          jq -Rs '{raw_json_config: .}' picoclaw/examples/raw_json_config.example.json > /tmp/picoclaw-data/options.json
+          docker run -d --rm \
+            --name picoclaw-addon-smoke \
+            -v /tmp/picoclaw-data:/data \
+            -v /tmp/picoclaw-share:/share \
+            picoclaw-addon-smoke:latest
+
+          for _ in $(seq 1 30); do
+            if docker exec picoclaw-addon-smoke wget -q --spider http://127.0.0.1:18800/; then
+              break
+            fi
+            sleep 2
+          done
+
+          test -f /tmp/picoclaw-data/picoclaw/config.json
+          test -f /tmp/picoclaw-data/picoclaw/launcher-config.json
+          test -d /tmp/picoclaw-share/picoclaw/workspace
+          jq -e '.agents.defaults.workspace == "/share/picoclaw/workspace"' /tmp/picoclaw-data/picoclaw/config.json >/dev/null
+          jq -e '.port == 18800 and .public == true' /tmp/picoclaw-data/picoclaw/launcher-config.json >/dev/null
+
+      - name: Print smoke logs
+        if: always()
+        run: docker logs picoclaw-addon-smoke || true
+
+      - name: Stop smoke container
+        if: always()
+        run: docker rm -f picoclaw-addon-smoke || true
