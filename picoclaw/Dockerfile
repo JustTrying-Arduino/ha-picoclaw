@@ -1,6 +1,6 @@
 ARG BUILD_FROM
 ARG PICOCLAW_VERSION=v0.2.4
-ARG PICOCLAW_WRAPPER_VERSION=v0.2.4-ha.4
+ARG PICOCLAW_WRAPPER_VERSION=v0.2.4-ha.5
 
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
@@ -22,6 +22,8 @@ RUN set -eux; \
       echo "Applying ${patch}"; \
       git apply "${patch}"; \
     done
+
+RUN go generate ./...
 
 RUN cd web/frontend && pnpm install --frozen-lockfile && pnpm build:backend
 
