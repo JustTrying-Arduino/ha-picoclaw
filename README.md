@@ -119,6 +119,26 @@ The launcher should be treated as an Ingress app first. `http://<host>:18800/` i
 Background on Ingress:
 [Presenting your addon](https://developers.home-assistant.io/docs/add-ons/presentation)
 
+## Configuration UI Inside Home Assistant
+
+The full PicoClaw launcher UI is available directly inside Home Assistant through Ingress, including:
+
+- model and provider configuration
+- credentials management
+- channel configuration such as Telegram
+- agent, tools, services, logs, and raw config pages
+
+Typical flow inside the UI:
+
+1. open `Models` or `Credentials` to configure your provider and API key
+2. open `Channels` to enable and configure Telegram or another channel
+3. click `Start Gateway`
+4. chat from the built-in launcher interface
+
+![PicoClaw launcher UI available inside Home Assistant](picoclaw/assets/launcher-webui.jpg)
+
+Screenshot source: official upstream PicoClaw launcher UI from [`sipeed/picoclaw`](https://github.com/sipeed/picoclaw).
+
 ## Where Files Live
 
 Editable workspace:
