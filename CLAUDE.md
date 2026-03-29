@@ -161,10 +161,20 @@ Le launcher fonctionne dans l'iframe ingress HA a l'URL `/api/hassio/proxy/picoc
 - Cross-compile avec Docker Buildx + QEMU
 - Push vers GHCR : `ghcr.io/justtrying-arduino/{arch}-picoclaw-ha:{version}` + tag `latest`
 
-### sync-upstream-release.yml (cron lundi 05:17 UTC ou dispatch manuel)
+### sync-upstream-release.yml (cron quotidien 07:00 UTC / ~9h Paris, ou dispatch manuel)
 - Interroge `sipeed/picoclaw/releases/latest` via `gh api`
 - Compare avec la version courante dans `build.yaml`
-- Si nouvelle version : execute `set-version.sh`, cree une PR automatique sur branche `codex/sync-picoclaw-{tag}`
+- Si nouvelle version :
+  1. Clone le nouveau tag upstream
+  2. Teste `git apply` de chaque patch et genere un rapport (OK / FAILED avec details)
+  3. Liste les fichiers patches qui ont ete modifies upstream (detection de risque)
+  4. Execute `set-version.sh` pour bumper les versions
+  5. Lance un smoke build Docker amd64
+  6. Cree une PR sur branche `codex/sync-picoclaw-{tag}` avec un rapport complet :
+     - Statut des patches (applique / echoue)
+     - Fichiers patches modifies upstream
+     - Resultat du build Docker
+     - Checklist de verification manuelle avant merge
 
 ---
 

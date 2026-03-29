@@ -28,26 +28,137 @@ jobs:
           current_tag="$(sed -n 's/^  PICOCLAW_VERSION: //p' picoclaw/build.yaml)"
           echo "latest=${latest_tag}" >> "${GITHUB_OUTPUT}"
           echo "current=${current_tag}" >> "${GITHUB_OUTPUT}"
+          if [ "${latest_tag}" = "${current_tag}" ]; then
+            echo "up_to_date=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "up_to_date=false" >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Stop when already current
-        if: steps.upstream.outputs.latest == steps.upstream.outputs.current
+        if: steps.upstream.outputs.up_to_date == 'true'
         run: echo "Already tracking ${{ steps.upstream.outputs.current }}"
 
-      - name: Update wrapper to new upstream version
-        if: steps.upstream.outputs.latest != steps.upstream.outputs.current
+      # --- Patch compatibility check ---
+      - name: Clone upstream at new tag
+        if: steps.upstream.outputs.up_to_date == 'false'
+        run: |
+          git clone --branch "${{ steps.upstream.outputs.latest }}" --depth 1 \
+            https://github.com/sipeed/picoclaw.git /tmp/picoclaw-upstream
+
+      - name: Test patch application
+        if: steps.upstream.outputs.up_to_date == 'false'
+        id: patch_test
+        run: |
+          cd /tmp/picoclaw-upstream
+          patch_ok=true
+          patch_report=""
+
+          for patch in "${{ github.workspace }}"/picoclaw/patches/*.patch; do
+            [ -e "${patch}" ] || continue
+            patch_name="$(basename "${patch}")"
+
+            if git apply --check "${patch}" 2>/tmp/patch-err.txt; then
+              patch_report="${patch_report}- \`${patch_name}\`: applies cleanly\n"
+            else
+              patch_ok=false
+              errors="$(cat /tmp/patch-err.txt)"
+              patch_report="${patch_report}- \`${patch_name}\`: **FAILED**\n\`\`\`\n${errors}\n\`\`\`\n"
+            fi
+          done
+
+          echo "patch_ok=${patch_ok}" >> "${GITHUB_OUTPUT}"
+          # Store multiline report
+          {
+            echo "patch_report<<PATCH_EOF"
+            printf '%b' "${patch_report}"
+            echo "PATCH_EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: List upstream changes in patched files
+        if: steps.upstream.outputs.up_to_date == 'false'
+        id: patched_files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Extract files modified by our patches
+          patched_files="$(grep '^diff --git' picoclaw/patches/*.patch 2>/dev/null \
+            | sed 's|.*b/||' | sort -u)"
+
+          report=""
+          current="${{ steps.upstream.outputs.current }}"
+          latest="${{ steps.upstream.outputs.latest }}"
+
+          for f in ${patched_files}; do
+            # Check if this file was modified between current and latest tags
+            changes="$(cd /tmp/picoclaw-upstream && git log --oneline "${current}..${latest}" -- "${f}" 2>/dev/null || echo "")"
+            if [ -n "${changes}" ]; then
+              report="${report}- \`${f}\`: modified upstream\n"
+            fi
+          done
+
+          if [ -z "${report}" ]; then
+            report="No patched files were modified upstream."
+          fi
+
+          {
+            echo "report<<FILES_EOF"
+            printf '%b' "${report}"
+            echo "FILES_EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      # --- Smoke build ---
+      - name: Update version files
+        if: steps.upstream.outputs.up_to_date == 'false'
         run: sh scripts/set-version.sh "${{ steps.upstream.outputs.latest }}"
 
+      - name: Docker smoke build (amd64)
+        if: steps.upstream.outputs.up_to_date == 'false'
+        id: smoke_build
+        run: |
+          if docker build \
+            --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.22 \
+            --build-arg PICOCLAW_VERSION=${{ steps.upstream.outputs.latest }} \
+            --build-arg PICOCLAW_WRAPPER_VERSION=${{ steps.upstream.outputs.latest }}-ha.1 \
+            --tag picoclaw-smoke:latest \
+            picoclaw 2>&1 | tee /tmp/build.log; then
+            echo "build_ok=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "build_ok=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      # --- Create PR with full report ---
       - name: Create update pull request
-        if: steps.upstream.outputs.latest != steps.upstream.outputs.current
+        if: steps.upstream.outputs.up_to_date == 'false'
         uses: peter-evans/create-pull-request@v7
         with:
           commit-message: "chore: track PicoClaw ${{ steps.upstream.outputs.latest }}"
           title: "Track PicoClaw ${{ steps.upstream.outputs.latest }}"
           body: |
-            Automated update to the latest official `sipeed/picoclaw` release.
+            Automated update to `sipeed/picoclaw` **${{ steps.upstream.outputs.latest }}** (was ${{ steps.upstream.outputs.current }}).
 
-            Changes:
-            - updates the upstream build tag in `picoclaw/build.yaml`
-            - updates the Home Assistant add-on version in `picoclaw/config.yaml`
+            ## Patch compatibility
+
+            ${{ steps.patch_test.outputs.patch_ok == 'true' && '**All patches apply cleanly.**' || '**Some patches FAILED to apply. Manual intervention required.**' }}
+
+            ${{ steps.patch_test.outputs.patch_report }}
+
+            ## Upstream changes in patched files
+
+            ${{ steps.patched_files.outputs.report }}
+
+            ## Docker build
+
+            ${{ steps.smoke_build.outputs.build_ok == 'true' && 'amd64 smoke build: **passed**' || 'amd64 smoke build: **FAILED** — check the workflow logs' }}
+
+            ## Checklist before merging
+
+            - [ ] Patch applies cleanly (see above)
+            - [ ] Docker build passes (see above)
+            - [ ] `run.sh` normalization covers any new upstream config keys/tools
+            - [ ] Test the add-on manually in Home Assistant
+
+            ---
+            *Upstream release: [sipeed/picoclaw ${{ steps.upstream.outputs.latest }}](https://github.com/sipeed/picoclaw/releases/tag/${{ steps.upstream.outputs.latest }})*
           branch: codex/sync-picoclaw-${{ steps.upstream.outputs.latest }}
           delete-branch: true
+          labels: upstream-sync
