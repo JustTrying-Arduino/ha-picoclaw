@@ -81,6 +81,21 @@ For verbose troubleshooting, add this to your JSON and restart the add-on:
 }
 ```
 
+## Launcher UI in Home Assistant
+
+The upstream PicoClaw launcher UI is available directly inside Home Assistant through Ingress.
+
+That UI lets you:
+
+- configure models and credentials
+- configure channels such as Telegram
+- start the gateway
+- chat from the built-in launcher interface
+
+![PicoClaw launcher UI available inside Home Assistant](assets/launcher-webui.jpg)
+
+Screenshot source: official upstream PicoClaw launcher UI from [`sipeed/picoclaw`](https://github.com/sipeed/picoclaw).
+
 ## Learn More
 
 - PicoClaw docs: [docs.picoclaw.io](https://docs.picoclaw.io/)
