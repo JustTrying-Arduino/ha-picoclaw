@@ -15,7 +15,7 @@ This add-on is a Home Assistant wrapper around the official `sipeed/picoclaw` re
 1. Open the Home Assistant add-on store.
    On current Home Assistant versions this is typically `Settings -> Add-ons -> Add-on Store`.
 2. Add this GitHub repository as a custom add-on repository:
-   `https://github.com/quentin/PicoClaw_Ha`
+   `https://github.com/JustTrying-Arduino/ha-picoclaw`
 3. Refresh the store, open `PicoClaw`, and click `Install`.
 4. Wait for the image build or pull to finish.
 5. Open the configuration tab before the first start.

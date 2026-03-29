@@ -45,7 +45,7 @@ Use this add-on when you want PicoClaw in Home Assistant, but still want upstrea
 
 1. Open the Home Assistant add-on store.
 2. Add this repository as a custom repository:
-   `https://github.com/quentin/PicoClaw_Ha`
+   `https://github.com/JustTrying-Arduino/ha-picoclaw`
 3. Install `PicoClaw`.
 4. Paste your PicoClaw JSON into `raw_json_config`.
 5. Start the add-on.

@@ -58,7 +58,7 @@ LABEL \
   org.opencontainers.image.title="PicoClaw Home Assistant Add-on" \
   org.opencontainers.image.description="Thin Home Assistant wrapper for PicoClaw" \
   org.opencontainers.image.version="${PICOCLAW_WRAPPER_VERSION}" \
-  org.opencontainers.image.source="https://github.com/quentin/PicoClaw_Ha" \
+  org.opencontainers.image.source="https://github.com/JustTrying-Arduino/ha-picoclaw" \
   org.opencontainers.image.revision="${BUILD_REF}"
 
 ENV LANG=en_US.UTF-8

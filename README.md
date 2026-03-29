@@ -66,7 +66,7 @@ The repository now contains a full Home Assistant add-on rebuild in [`picoclaw/`
 1. Open Home Assistant and go to the add-on store.
    On recent versions this is usually `Settings -> Add-ons -> Add-on Store`.
 2. Add this repository as a custom add-on repository:
-   `https://github.com/quentin/PicoClaw_Ha`
+   `https://github.com/JustTrying-Arduino/ha-picoclaw`
 3. Refresh the store, open `PicoClaw`, and install it.
 4. After install, open the add-on configuration and fill `raw_json_config`.
 5. Start the add-on.
