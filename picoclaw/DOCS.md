@@ -17,11 +17,14 @@ This add-on is a Home Assistant wrapper around the official `sipeed/picoclaw` re
 2. Add this GitHub repository as a custom add-on repository:
    `https://github.com/JustTrying-Arduino/ha-picoclaw`
 3. Refresh the store, open `PicoClaw`, and click `Install`.
-4. Wait for the image build or pull to finish.
+4. Wait for Home Assistant to build the image from the repository Dockerfile.
 5. Open the configuration tab before the first start.
 
 Home Assistant reference:
 [Create an app repository](https://developers.home-assistant.io/docs/add-ons/repository)
+
+Note:
+This repository is currently configured so Home Assistant can build the add-on locally instead of requiring a pre-published GHCR image. This avoids install failures when the registry package is missing or still private.
 
 ## First Configuration
 

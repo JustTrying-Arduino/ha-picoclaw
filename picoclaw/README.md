@@ -51,6 +51,8 @@ Use this add-on when you want PicoClaw in Home Assistant, but still want upstrea
 5. Start the add-on.
 6. Open it with `Open Web UI`.
 
+If prebuilt registry images are not available yet, Home Assistant can build the add-on locally from the repository Dockerfile.
+
 ## Configure It
 
 The add-on uses one Home Assistant option only:

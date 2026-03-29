@@ -72,6 +72,8 @@ The repository now contains a full Home Assistant add-on rebuild in [`picoclaw/`
 5. Start the add-on.
 6. Open the UI with the add-on's `Open Web UI` button or through the Home Assistant sidebar entry exposed by Ingress.
 
+By default, Home Assistant can build the add-on image directly from this repository's `Dockerfile`. That is useful while GHCR publication is not set up yet or if the registry package is still private.
+
 The Home Assistant developer docs explain the custom repository flow here:
 [Create an app repository](https://developers.home-assistant.io/docs/add-ons/repository).
 
