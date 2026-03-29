@@ -1,0 +1,32 @@
+diff --git a/web/backend/main.go b/web/backend/main.go
+index c58e973..9a38c2c 100644
+--- a/web/backend/main.go
++++ b/web/backend/main.go
+@@ -211,16 +211,21 @@ func main() {
+ 		logger.Fatalf("Invalid allowed CIDR configuration: %v", err)
+ 	}
+ 
+-	dashAuth := middleware.LauncherDashboardAuth(middleware.LauncherDashboardAuthConfig{
+-		ExpectedCookie: dashboardSessionCookie,
+-		Token:          dashboardToken,
+-	}, accessControlledMux)
++	handler := accessControlledMux
++	if os.Getenv("PICOCLAW_LAUNCHER_DISABLE_AUTH") != "1" {
++		handler = middleware.LauncherDashboardAuth(middleware.LauncherDashboardAuthConfig{
++			ExpectedCookie: dashboardSessionCookie,
++			Token:          dashboardToken,
++		}, accessControlledMux)
++	} else {
++		logger.InfoC("web", "Launcher dashboard auth disabled by PICOCLAW_LAUNCHER_DISABLE_AUTH")
++	}
+ 
+ 	// Apply middleware stack
+-	handler := middleware.Recoverer(
++	handler = middleware.Recoverer(
+ 		middleware.Logger(
+ 			middleware.ReferrerPolicyNoReferrer(
+-				middleware.JSONContentType(dashAuth),
++				middleware.JSONContentType(handler),
+ 			),
+ 		),
+ 	)

@@ -1,0 +1,4 @@
+configuration:
+  raw_json_config:
+    name: Raw JSON config
+    description: Full PicoClaw JSON object written to /data/picoclaw/config.json at startup. The add-on always forces agents.defaults.workspace to /share/picoclaw/workspace.

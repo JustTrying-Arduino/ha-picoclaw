@@ -1,0 +1,211 @@
+# PicoClaw
+
+## What This Add-on Is
+
+This add-on is a Home Assistant wrapper around the official `sipeed/picoclaw` releases. It does not try to fork PicoClaw behavior. The wrapper only owns Home Assistant concerns:
+
+- storage layout
+- startup validation
+- ingress compatibility
+- English-first defaults
+- upstream release tracking
+
+## Installation in Home Assistant
+
+1. Open the Home Assistant add-on store.
+   On current Home Assistant versions this is typically `Settings -> Add-ons -> Add-on Store`.
+2. Add this GitHub repository as a custom add-on repository:
+   `https://github.com/quentin/PicoClaw_Ha`
+3. Refresh the store, open `PicoClaw`, and click `Install`.
+4. Wait for the image build or pull to finish.
+5. Open the configuration tab before the first start.
+
+Home Assistant reference:
+[Create an app repository](https://developers.home-assistant.io/docs/add-ons/repository)
+
+## First Configuration
+
+The add-on exposes one option only:
+
+- `raw_json_config`
+
+Paste a complete PicoClaw JSON object into that field.
+
+The wrapper will then:
+
+- validate the JSON with `jq`
+- reject empty input
+- require a JSON object
+- write the normalized result to `/data/picoclaw/config.json`
+- force `agents.defaults.workspace` to `/share/picoclaw/workspace`
+
+If the add-on fails to start, check the logs first. The wrapper is designed to fail fast with a clear config error instead of silently starting with a broken runtime.
+
+Starter example:
+
+- [`examples/raw_json_config.example.json`](examples/raw_json_config.example.json)
+
+## Storage Contract
+
+User-editable workspace:
+
+- `/share/picoclaw/workspace`
+
+Internal runtime state:
+
+- `/data/picoclaw/config.json`
+- `/data/picoclaw/.security.yml`
+- `/data/picoclaw/launcher-config.json`
+- `/data/picoclaw/logs`
+- `/data/picoclaw/workspace -> /share/picoclaw/workspace`
+
+Important: `/share` was chosen for editability from File Editor and Samba, not for the strongest encapsulated backup semantics. Runtime state still lives in `/data`.
+
+## Configuration Contract
+
+This add-on exposes one option only:
+
+- `raw_json_config`
+
+Rules:
+
+- it must be valid JSON
+- it must parse to a JSON object
+- on every boot, the wrapper writes it to `/data/picoclaw/config.json`
+- on every boot, the wrapper forces `agents.defaults.workspace` to `/share/picoclaw/workspace`
+
+Empty or invalid JSON fails fast before PicoClaw starts.
+
+## Minimal Example
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model_name": "gpt-5.4",
+      "restrict_to_workspace": true
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "gpt-5.4",
+      "model": "openai/gpt-5.4",
+      "api_key": "sk-your-openai-key",
+      "api_base": "https://api.openai.com/v1"
+    }
+  ],
+  "tools": {
+    "exec": {
+      "enabled": true,
+      "enable_deny_patterns": true
+    },
+    "web": {
+      "enabled": true
+    },
+    "mcp": {
+      "enabled": false,
+      "servers": {
+        "home-assistant": {
+          "enabled": false,
+          "type": "http",
+          "url": "http://homeassistant:8123/api/mcp",
+          "headers": {
+            "Authorization": "Bearer YOUR_LONG_LIVED_ACCESS_TOKEN"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+The MCP block is optional. Startup succeeds even when MCP is absent.
+
+## Accessing the UI
+
+The main UI is the upstream web launcher:
+
+- Home Assistant Ingress -> `picoclaw-launcher`
+
+Typical flow:
+
+1. Start the add-on.
+2. Open the add-on page.
+3. Click `Open Web UI`.
+4. Optionally enable the Home Assistant sidebar entry for direct access.
+
+No host port mapping is required by default. The add-on is designed to be used through Home Assistant Ingress.
+
+Home Assistant background on Ingress:
+[Presenting your addon](https://developers.home-assistant.io/docs/add-ons/presentation)
+
+## Optional `.security.yml`
+
+If `/share/picoclaw/.security.yml` exists, the wrapper copies it to `/data/picoclaw/.security.yml` during startup.
+
+This keeps compatibility with upstream secret separation without adding a second Home Assistant config surface in v1.
+
+If `/share/picoclaw/config.override.json` exists, the wrapper ignores it intentionally in v1 to avoid split-brain configuration.
+
+## Home Assistant UI
+
+Primary UI:
+
+- Home Assistant Ingress -> `picoclaw-launcher`
+
+Power-user shell tool:
+
+- `picoclaw-launcher-tui`
+
+The TUI is installed in the image and available from an interactive shell into the add-on container, but it is not embedded into the Home Assistant frontend.
+
+## English-First Behavior
+
+The wrapper forces an English-first launcher experience by:
+
+- starting the launcher with `-lang en`
+- setting container locale variables to English
+- applying a tiny upstream patch set so the web launcher defaults to English and avoids mixed Chinese labels in the default UI
+
+Chinese localization support is still present upstream; the wrapper only changes the default presentation.
+
+## Security Notes
+
+- raw JSON in Home Assistant options may contain secrets
+- v1 optimizes for a single configuration field, not for maximum secret isolation
+- upstream `.security.yml` compatibility is preserved for future hardening
+- no host ports are exposed by default
+- the add-on uses Home Assistant Ingress and `share:rw` only
+
+## Shell Access
+
+Useful commands inside the container:
+
+```sh
+picoclaw-launcher-tui /data/picoclaw/config.json
+picoclaw gateway
+picoclaw agent -m "hello"
+```
+
+The add-on runtime always launches the web launcher in the foreground. Running commands manually is only for troubleshooting.
+
+## Recommended Upstream Reading
+
+If you want to go beyond the wrapper and tune PicoClaw itself, these are the best official references:
+
+- PicoClaw docs homepage:
+  [docs.picoclaw.io](https://docs.picoclaw.io/)
+- Quick overview and launcher behavior:
+  [Getting Started](https://docs.picoclaw.io/docs/getting-started/)
+- Full JSON field reference:
+  [Full Configuration Reference](https://docs.picoclaw.io/docs/configuration/config-reference/)
+- Model providers and `model_list`:
+  [Model Configuration](https://docs.picoclaw.io/docs/configuration/model-list/)
+- Tools, exec, web, cron, and MCP:
+  [Tools Configuration](https://docs.picoclaw.io/docs/configuration/tools/)
+- Workspace restrictions and sandbox defaults:
+  [Security Sandbox](https://docs.picoclaw.io/docs/configuration/security-sandbox/)
+
+For Home Assistant internals and network behavior between add-ons:
+
+- [Add-on communication](https://developers.home-assistant.io/docs/add-ons/communication/)

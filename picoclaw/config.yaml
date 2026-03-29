@@ -1,0 +1,23 @@
+name: PicoClaw
+version: v0.2.4-ha.1
+slug: picoclaw
+description: Home Assistant wrapper for the official PicoClaw launcher and gateway
+url: https://github.com/quentin/PicoClaw_Ha
+image: ghcr.io/quentin/{arch}-picoclaw-ha
+arch:
+  - amd64
+  - aarch64
+  - armv7
+startup: application
+boot: auto
+init: false
+ingress: true
+ingress_port: 18800
+panel_icon: mdi:robot-happy-outline
+panel_title: PicoClaw
+map:
+  - share:rw
+options:
+  raw_json_config: ""
+schema:
+  raw_json_config: str

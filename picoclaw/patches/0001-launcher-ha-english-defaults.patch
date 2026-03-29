@@ -1,0 +1,87 @@
+diff --git a/web/frontend/src/components/app-header.tsx b/web/frontend/src/components/app-header.tsx
+index 4f06880..075b6b3 100644
+--- a/web/frontend/src/components/app-header.tsx
++++ b/web/frontend/src/components/app-header.tsx
+@@ -227,7 +227,7 @@ export function AppHeader() {
+               English
+             </DropdownMenuItem>
+             <DropdownMenuItem onClick={() => i18n.changeLanguage("zh")}>
+-              简体中文
++              Chinese (Simplified)
+             </DropdownMenuItem>
+           </DropdownMenuContent>
+         </DropdownMenu>
+diff --git a/web/frontend/src/components/models/provider-label.ts b/web/frontend/src/components/models/provider-label.ts
+index 82600a9..a17e3d0 100644
+--- a/web/frontend/src/components/models/provider-label.ts
++++ b/web/frontend/src/components/models/provider-label.ts
+@@ -3,21 +3,21 @@ const PROVIDER_LABELS: Record<string, string> = {
+   anthropic: "Anthropic",
+   gemini: "Google Gemini",
+   deepseek: "DeepSeek",
+-  qwen: "Qwen (阿里云)",
+-  moonshot: "Moonshot (月之暗面)",
++  qwen: "Qwen (Alibaba Cloud)",
++  moonshot: "Moonshot AI",
+   groq: "Groq",
+   openrouter: "OpenRouter",
+   nvidia: "NVIDIA",
+   cerebras: "Cerebras",
+-  volcengine: "Volcengine (火山引擎)",
+-  shengsuanyun: "ShengsuanYun (神算云)",
++  volcengine: "Volcengine",
++  shengsuanyun: "ShengsuanYun",
+   antigravity: "Google Code Assist",
+   "github-copilot": "GitHub Copilot",
+   ollama: "Ollama (local)",
+   mistral: "Mistral AI",
+   avian: "Avian",
+   vllm: "VLLM (local)",
+-  zhipu: "Zhipu AI (智谱)",
++  zhipu: "Zhipu AI",
+   mimo: "Xiaomi MiMo",
+ }
+ 
+diff --git a/web/frontend/src/i18n/index.ts b/web/frontend/src/i18n/index.ts
+index bdc1fe9..4e8dea2 100644
+--- a/web/frontend/src/i18n/index.ts
++++ b/web/frontend/src/i18n/index.ts
+@@ -4,7 +4,6 @@ import "dayjs/locale/zh-cn"
+ import localizedFormat from "dayjs/plugin/localizedFormat"
+ import relativeTime from "dayjs/plugin/relativeTime"
+ import i18n from "i18next"
+-import LanguageDetector from "i18next-browser-languagedetector"
+ import { initReactI18next } from "react-i18next"
+ 
+ import en from "./locales/en.json"
+@@ -14,9 +13,6 @@ dayjs.extend(relativeTime)
+ dayjs.extend(localizedFormat)
+ 
+ i18n
+-  // detect user language
+-  // learn more: https://github.com/i18next/i18next-browser-languageDetector
+-  .use(LanguageDetector)
+   // pass the i18n instance to react-i18next.
+   .use(initReactI18next)
+   // init i18next
+@@ -30,6 +26,7 @@ i18n
+         translation: zh,
+       },
+     },
++    lng: "en",
+     fallbackLng: "en",
+     debug: false,
+ 
+diff --git a/web/frontend/src/routes/launcher-login.tsx b/web/frontend/src/routes/launcher-login.tsx
+index e7f774d..ae6b6a5 100644
+--- a/web/frontend/src/routes/launcher-login.tsx
++++ b/web/frontend/src/routes/launcher-login.tsx
+@@ -92,7 +92,7 @@ function LauncherLoginPage() {
+               English
+             </DropdownMenuItem>
+             <DropdownMenuItem onClick={() => i18n.changeLanguage("zh")}>
+-              简体中文
++              Chinese (Simplified)
+             </DropdownMenuItem>
+           </DropdownMenuContent>
+         </DropdownMenu>

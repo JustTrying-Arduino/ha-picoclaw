@@ -1,0 +1,40 @@
+{
+  "agents": {
+    "defaults": {
+      "model_name": "gpt-5.4",
+      "restrict_to_workspace": true,
+      "max_tokens": 8192,
+      "context_window": 131072
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "gpt-5.4",
+      "model": "openai/gpt-5.4",
+      "api_key": "sk-your-openai-key",
+      "api_base": "https://api.openai.com/v1"
+    }
+  ],
+  "tools": {
+    "exec": {
+      "enabled": true,
+      "enable_deny_patterns": true
+    },
+    "web": {
+      "enabled": true
+    },
+    "mcp": {
+      "enabled": false,
+      "servers": {
+        "home-assistant": {
+          "enabled": false,
+          "type": "http",
+          "url": "http://homeassistant:8123/api/mcp",
+          "headers": {
+            "Authorization": "Bearer YOUR_LONG_LIVED_ACCESS_TOKEN"
+          }
+        }
+      }
+    }
+  }
+}
