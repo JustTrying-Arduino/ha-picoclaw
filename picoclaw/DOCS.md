@@ -81,6 +81,8 @@ What to expect in the shared workspace after PicoClaw initializes:
 
 If you inspect `/data/picoclaw/workspace`, that path should resolve to the same shared workspace through a symlink. The reference location to check from Home Assistant is always `/share/picoclaw/workspace`.
 
+Builtin skills shipped by upstream are also bundled inside the add-on image. They are available to the launcher and agent even if they are not copied into `/share/picoclaw/workspace/skills`.
+
 ## Configuration Contract
 
 This add-on exposes one option only:

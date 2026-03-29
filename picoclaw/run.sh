@@ -142,10 +142,18 @@ write_runtime_config() {
         printf '%s' "${raw_json}" | jq --sort-keys --arg workspace "${SHARED_WORKSPACE}" '
             def ensure_enabled(path):
                 if getpath(path) == null then setpath(path; true) else . end;
+            def ensure_default(path; value):
+                if getpath(path) == null or getpath(path) == "" then setpath(path; value) else . end;
+            def ensure_default_port(path; value):
+                if getpath(path) == null or getpath(path) == 0 then setpath(path; value) else . end;
+            .version = 1 |
             .agents = (.agents // {}) |
             .agents.defaults = (.agents.defaults // {}) |
+            .gateway = (.gateway // {}) |
             .tools = (.tools // {}) |
             .agents.defaults.workspace = $workspace |
+            ensure_default(["gateway", "host"]; "127.0.0.1") |
+            ensure_default_port(["gateway", "port"]; 18790) |
             ensure_enabled(["tools", "skills", "enabled"]) |
             ensure_enabled(["tools", "find_skills", "enabled"]) |
             ensure_enabled(["tools", "install_skill", "enabled"]) |
@@ -170,6 +178,7 @@ start_launcher() {
     export PICOCLAW_CONFIG="${RUNTIME_CONFIG}"
     export PICOCLAW_BINARY="/usr/local/bin/picoclaw"
     export PICOCLAW_GATEWAY_HOST="0.0.0.0"
+    export PICOCLAW_BUILTIN_SKILLS="/usr/local/share/picoclaw/skills"
     export LANG="en_US.UTF-8"
     export LC_ALL="en_US.UTF-8"
 
