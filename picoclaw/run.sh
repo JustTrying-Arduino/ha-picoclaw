@@ -98,7 +98,6 @@ start_launcher() {
     export PICOCLAW_CONFIG="${RUNTIME_CONFIG}"
     export PICOCLAW_BINARY="/usr/local/bin/picoclaw"
     export PICOCLAW_GATEWAY_HOST="0.0.0.0"
-    export PICOCLAW_LAUNCHER_DISABLE_AUTH="1"
     export LANG="en_US.UTF-8"
     export LC_ALL="en_US.UTF-8"
 

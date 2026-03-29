@@ -12,7 +12,7 @@ index 4f06880..075b6b3 100644
            </DropdownMenuContent>
          </DropdownMenu>
 diff --git a/web/frontend/src/components/models/provider-label.ts b/web/frontend/src/components/models/provider-label.ts
-index 82600a9..a17e3d0 100644
+index 923cd95..d191255 100644
 --- a/web/frontend/src/components/models/provider-label.ts
 +++ b/web/frontend/src/components/models/provider-label.ts
 @@ -3,21 +3,21 @@ const PROVIDER_LABELS: Record<string, string> = {
@@ -39,9 +39,9 @@ index 82600a9..a17e3d0 100644
    vllm: "VLLM (local)",
 -  zhipu: "Zhipu AI (智谱)",
 +  zhipu: "Zhipu AI",
-   mimo: "Xiaomi MiMo",
  }
  
+ export function getProviderKey(model: string): string {
 diff --git a/web/frontend/src/i18n/index.ts b/web/frontend/src/i18n/index.ts
 index bdc1fe9..4e8dea2 100644
 --- a/web/frontend/src/i18n/index.ts
@@ -72,16 +72,3 @@ index bdc1fe9..4e8dea2 100644
      fallbackLng: "en",
      debug: false,
  
-diff --git a/web/frontend/src/routes/launcher-login.tsx b/web/frontend/src/routes/launcher-login.tsx
-index e7f774d..ae6b6a5 100644
---- a/web/frontend/src/routes/launcher-login.tsx
-+++ b/web/frontend/src/routes/launcher-login.tsx
-@@ -92,7 +92,7 @@ function LauncherLoginPage() {
-               English
-             </DropdownMenuItem>
-             <DropdownMenuItem onClick={() => i18n.changeLanguage("zh")}>
--              简体中文
-+              Chinese (Simplified)
-             </DropdownMenuItem>
-           </DropdownMenuContent>
-         </DropdownMenu>
