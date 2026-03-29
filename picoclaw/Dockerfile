@@ -1,6 +1,6 @@
 ARG BUILD_FROM
 ARG PICOCLAW_VERSION=v0.2.4
-ARG PICOCLAW_WRAPPER_VERSION=v0.2.4-ha.3
+ARG PICOCLAW_WRAPPER_VERSION=v0.2.4-ha.4
 
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
@@ -15,7 +15,13 @@ WORKDIR /src
 
 RUN git clone --branch "${PICOCLAW_VERSION}" --depth 1 https://github.com/sipeed/picoclaw.git .
 COPY patches /patches
-RUN if ls /patches/*.patch >/dev/null 2>&1; then git apply /patches/*.patch; fi
+RUN set -eux; \
+    find /patches -maxdepth 1 -type f -name '*.patch' -print | sort; \
+    for patch in /patches/*.patch; do \
+      [ -e "${patch}" ] || exit 0; \
+      echo "Applying ${patch}"; \
+      git apply "${patch}"; \
+    done
 
 RUN cd web/frontend && pnpm install --frozen-lockfile && pnpm build:backend
 
