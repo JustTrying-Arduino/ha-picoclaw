@@ -20,6 +20,30 @@
       "enabled": true,
       "enable_deny_patterns": true
     },
+    "skills": {
+      "enabled": true
+    },
+    "find_skills": {
+      "enabled": true
+    },
+    "install_skill": {
+      "enabled": true
+    },
+    "list_dir": {
+      "enabled": true
+    },
+    "read_file": {
+      "enabled": true
+    },
+    "write_file": {
+      "enabled": true
+    },
+    "append_file": {
+      "enabled": true
+    },
+    "edit_file": {
+      "enabled": true
+    },
     "web": {
       "enabled": true
     },
@@ -36,5 +60,8 @@
         }
       }
     }
+  },
+  "gateway": {
+    "log_level": "debug"
   }
 }

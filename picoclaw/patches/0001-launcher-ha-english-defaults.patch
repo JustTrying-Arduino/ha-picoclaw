@@ -1,3 +1,384 @@
+diff --git a/web/backend/api/gateway.go b/web/backend/api/gateway.go
+index 4bde5ce..731d047 100644
+--- a/web/backend/api/gateway.go
++++ b/web/backend/api/gateway.go
+@@ -381,7 +381,13 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
+ 	// Locate the picoclaw executable
+ 	execPath := utils.FindPicoclawBinary()
+ 
+-	cmd = exec.Command(execPath, "gateway", "-E")
++	args := []string{"gateway", "-E"}
++	if strings.EqualFold(strings.TrimSpace(cfg.Gateway.LogLevel), "debug") {
++		args = append(args, "-d", "--no-truncate")
++		logger.InfoC("gateway", "HA wrapper enabled gateway debug mode (-d --no-truncate)")
++	}
++
++	cmd = exec.Command(execPath, args...)
+ 	cmd.Env = os.Environ()
+ 	// Forward the launcher's config path via the environment variable that
+ 	// GetConfigPath() already reads, so the gateway sub-process uses the same
+@@ -865,6 +871,8 @@ func scanPipe(r io.Reader, buf *LogBuffer) {
+ 	scanner := bufio.NewScanner(r)
+ 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+ 	for scanner.Scan() {
+-		buf.Append(scanner.Text())
++		line := scanner.Text()
++		buf.Append(line)
++		fmt.Println(line)
+ 	}
+ }
+diff --git a/web/backend/api/gateway_host.go b/web/backend/api/gateway_host.go
+index 592571a..d378914 100644
+--- a/web/backend/api/gateway_host.go
++++ b/web/backend/api/gateway_host.go
+@@ -75,6 +75,17 @@ func requestHostName(r *http.Request) string {
+ 	return "127.0.0.1"
+ }
+ 
++func ingressBasePath(r *http.Request) string {
++	raw := strings.TrimSpace(r.Header.Get("X-Ingress-Path"))
++	if raw == "" || raw == "/" {
++		return ""
++	}
++	if !strings.HasPrefix(raw, "/") {
++		raw = "/" + raw
++	}
++	return strings.TrimRight(raw, "/")
++}
++
+ func requestWSScheme(r *http.Request) string {
+ 	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+ 		proto := strings.ToLower(strings.TrimSpace(strings.Split(forwarded, ",")[0]))
+@@ -94,15 +105,10 @@ func requestWSScheme(r *http.Request) string {
+ }
+ 
+ func (h *Handler) buildWsURL(r *http.Request, cfg *config.Config) string {
+-	host := h.effectiveGatewayBindHost(cfg)
+-	if host == "" || host == "0.0.0.0" {
++	_ = cfg
++	host := strings.TrimSpace(r.Host)
++	if host == "" {
+ 		host = requestHostName(r)
+ 	}
+-	// Use web server port instead of gateway port to avoid exposing extra ports
+-	// The WebSocket connection will be proxied by the backend to the gateway
+-	wsPort := h.serverPort
+-	if wsPort == 0 {
+-		wsPort = 18800 // default web server port
+-	}
+-	return requestWSScheme(r) + "://" + net.JoinHostPort(host, strconv.Itoa(wsPort)) + "/pico/ws"
++	return requestWSScheme(r) + "://" + host + ingressBasePath(r) + "/pico/ws"
+ }
+diff --git a/web/backend/embed.go b/web/backend/embed.go
+index cf0c76b..ddf46a0 100644
+--- a/web/backend/embed.go
++++ b/web/backend/embed.go
+@@ -1,8 +1,11 @@
+ package main
+ 
+ import (
++	"bytes"
++	"encoding/json"
+ 	"embed"
+ 	"fmt"
++	"html/template"
+ 	"io/fs"
+ 	"mime"
+ 	"net/http"
+@@ -15,6 +18,48 @@ import (
+ //go:embed all:dist
+ var frontendFS embed.FS
+ 
++func requestIngressBasePath(r *http.Request) string {
++	raw := strings.TrimSpace(r.Header.Get("X-Ingress-Path"))
++	if raw == "" || raw == "/" {
++		return ""
++	}
++	if !strings.HasPrefix(raw, "/") {
++		raw = "/" + raw
++	}
++	return strings.TrimRight(raw, "/")
++}
++
++func serveInjectedIndex(w http.ResponseWriter, r *http.Request, subFS fs.FS) {
++	indexHTML, err := fs.ReadFile(subFS, "index.html")
++	if err != nil {
++		http.Error(w, "index.html missing", http.StatusInternalServerError)
++		return
++	}
++
++	basePath := requestIngressBasePath(r)
++	baseHref := "/"
++	if basePath != "" {
++		baseHref = basePath + "/"
++	}
++
++	basePathJSON, err := json.Marshal(basePath)
++	if err != nil {
++		http.Error(w, "failed to encode runtime config", http.StatusInternalServerError)
++		return
++	}
++
++	injection := fmt.Sprintf(
++		`<base href="%s"><script>window.__PICOCLAW_BASE_PATH__=%s;</script>`,
++		template.HTMLEscapeString(baseHref),
++		string(basePathJSON),
++	)
++
++	body := bytes.Replace(indexHTML, []byte("<head>"), []byte("<head>"+injection), 1)
++	w.Header().Set("Content-Type", "text/html; charset=utf-8")
++	w.WriteHeader(http.StatusOK)
++	_, _ = w.Write(body)
++}
++
+ // registerEmbedRoutes sets up the HTTP handler to serve the embedded frontend files
+ func registerEmbedRoutes(mux *http.ServeMux) {
+ 	// Register correct MIME type for SVG files
+@@ -58,6 +103,11 @@ func registerEmbedRoutes(mux *http.ServeMux) {
+ 				cleanPath = ""
+ 			}
+ 
++			if cleanPath == "" {
++				serveInjectedIndex(w, r, subFS)
++				return
++			}
++
+ 			// Existing static files/directories should be served directly.
+ 			if cleanPath != "" {
+ 				if _, statErr := fs.Stat(subFS, cleanPath); statErr == nil {
+@@ -71,9 +121,7 @@ func registerEmbedRoutes(mux *http.ServeMux) {
+ 				}
+ 			}
+ 
+-			indexReq := r.Clone(r.Context())
+-			indexReq.URL.Path = "/"
+-			fileServer.ServeHTTP(w, indexReq)
++			serveInjectedIndex(w, r, subFS)
+ 		}),
+ 	)
+ }
+diff --git a/web/frontend/src/api/channels.ts b/web/frontend/src/api/channels.ts
+index 85550ca..981ed47 100644
+--- a/web/frontend/src/api/channels.ts
++++ b/web/frontend/src/api/channels.ts
+@@ -1,4 +1,5 @@
+ // API client for channels navigation and channel-specific config flows.
++import { withBasePath } from "@/lib/runtime"
+ 
+ export type ChannelConfig = Record<string, unknown>
+ export type AppConfig = Record<string, unknown>
+@@ -19,10 +20,8 @@ interface ConfigActionResponse {
+   errors?: string[]
+ }
+ 
+-const BASE_URL = ""
+-
+ async function request<T>(path: string, options?: RequestInit): Promise<T> {
+-  const res = await fetch(`${BASE_URL}${path}`, options)
++  const res = await fetch(withBasePath(path), options)
+   if (!res.ok) {
+     let message = `API error: ${res.status} ${res.statusText}`
+     try {
+diff --git a/web/frontend/src/api/gateway.ts b/web/frontend/src/api/gateway.ts
+index 9e02a02..f500fe1 100644
+--- a/web/frontend/src/api/gateway.ts
++++ b/web/frontend/src/api/gateway.ts
+@@ -1,4 +1,5 @@
+ // API client for gateway process management.
++import { withBasePath } from "@/lib/runtime"
+ 
+ interface GatewayStatusResponse {
+   gateway_status: "running" | "starting" | "restarting" | "stopped" | "error"
+@@ -24,10 +25,8 @@ interface GatewayActionResponse {
+   log_run_id?: number
+ }
+ 
+-const BASE_URL = ""
+-
+ async function request<T>(path: string, options?: RequestInit): Promise<T> {
+-  const res = await fetch(`${BASE_URL}${path}`, options)
++  const res = await fetch(withBasePath(path), options)
+   if (!res.ok) {
+     throw new Error(`API error: ${res.status} ${res.statusText}`)
+   }
+diff --git a/web/frontend/src/api/models.ts b/web/frontend/src/api/models.ts
+index aa66a73..655f01b 100644
+--- a/web/frontend/src/api/models.ts
++++ b/web/frontend/src/api/models.ts
+@@ -1,4 +1,5 @@
+ import { refreshGatewayState } from "@/store/gateway"
++import { withBasePath } from "@/lib/runtime"
+ 
+ // API client for model list management.
+ 
+@@ -36,10 +37,8 @@ interface ModelActionResponse {
+   default_model?: string
+ }
+ 
+-const BASE_URL = ""
+-
+ async function request<T>(path: string, options?: RequestInit): Promise<T> {
+-  const res = await fetch(`${BASE_URL}${path}`, options)
++  const res = await fetch(withBasePath(path), options)
+   if (!res.ok) {
+     throw new Error(`API error: ${res.status} ${res.statusText}`)
+   }
+diff --git a/web/frontend/src/api/oauth.ts b/web/frontend/src/api/oauth.ts
+index a1ed1af..9f7efb0 100644
+--- a/web/frontend/src/api/oauth.ts
++++ b/web/frontend/src/api/oauth.ts
+@@ -1,3 +1,5 @@
++import { withBasePath } from "@/lib/runtime"
++
+ export type OAuthProvider = "openai" | "anthropic" | "google-antigravity"
+ export type OAuthMethod = "browser" | "device_code" | "token"
+ 
+@@ -48,10 +50,8 @@ interface OAuthProvidersResponse {
+   providers: OAuthProviderStatus[]
+ }
+ 
+-const BASE_URL = ""
+-
+ async function request<T>(path: string, options?: RequestInit): Promise<T> {
+-  const res = await fetch(`${BASE_URL}${path}`, options)
++  const res = await fetch(withBasePath(path), options)
+   if (!res.ok) {
+     const message = await res.text()
+     throw new Error(message || `API error: ${res.status} ${res.statusText}`)
+diff --git a/web/frontend/src/api/pico.ts b/web/frontend/src/api/pico.ts
+index 9a1a553..7fb77eb 100644
+--- a/web/frontend/src/api/pico.ts
++++ b/web/frontend/src/api/pico.ts
+@@ -1,4 +1,5 @@
+ // API client for Pico Channel configuration.
++import { withBasePath } from "@/lib/runtime"
+ 
+ interface PicoTokenResponse {
+   token: string
+@@ -13,10 +14,8 @@ interface PicoSetupResponse {
+   changed: boolean
+ }
+ 
+-const BASE_URL = ""
+-
+ async function request<T>(path: string, options?: RequestInit): Promise<T> {
+-  const res = await fetch(`${BASE_URL}${path}`, options)
++  const res = await fetch(withBasePath(path), options)
+   if (!res.ok) {
+     throw new Error(`API error: ${res.status} ${res.statusText}`)
+   }
+diff --git a/web/frontend/src/api/sessions.ts b/web/frontend/src/api/sessions.ts
+index 10b0d28..fbebe4d 100644
+--- a/web/frontend/src/api/sessions.ts
++++ b/web/frontend/src/api/sessions.ts
+@@ -1,4 +1,5 @@
+ // Sessions API — list and retrieve chat session history
++import { withBasePath } from "@/lib/runtime"
+ 
+ export interface SessionSummary {
+   id: string
+@@ -26,7 +27,7 @@ export async function getSessions(
+     limit: limit.toString(),
+   })
+ 
+-  const res = await fetch(`/api/sessions?${params.toString()}`)
++  const res = await fetch(withBasePath(`/api/sessions?${params.toString()}`))
+   if (!res.ok) {
+     throw new Error(`Failed to fetch sessions: ${res.status}`)
+   }
+@@ -34,7 +35,9 @@ export async function getSessions(
+ }
+ 
+ export async function getSessionHistory(id: string): Promise<SessionDetail> {
+-  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`)
++  const res = await fetch(
++    withBasePath(`/api/sessions/${encodeURIComponent(id)}`),
++  )
+   if (!res.ok) {
+     throw new Error(`Failed to fetch session ${id}: ${res.status}`)
+   }
+@@ -42,9 +45,12 @@ export async function getSessionHistory(id: string): Promise<SessionDetail> {
+ }
+ 
+ export async function deleteSession(id: string): Promise<void> {
+-  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+-    method: "DELETE",
+-  })
++  const res = await fetch(
++    withBasePath(`/api/sessions/${encodeURIComponent(id)}`),
++    {
++      method: "DELETE",
++    },
++  )
+   if (!res.ok) {
+     throw new Error(`Failed to delete session ${id}: ${res.status}`)
+   }
+diff --git a/web/frontend/src/api/skills.ts b/web/frontend/src/api/skills.ts
+index 307cbd7..3abd7e5 100644
+--- a/web/frontend/src/api/skills.ts
++++ b/web/frontend/src/api/skills.ts
+@@ -1,3 +1,5 @@
++import { withBasePath } from "@/lib/runtime"
++
+ export interface SkillSupportItem {
+   name: string
+   path: string
+@@ -22,7 +24,7 @@ interface SkillActionResponse {
+ }
+ 
+ async function request<T>(path: string, options?: RequestInit): Promise<T> {
+-  const res = await fetch(path, options)
++  const res = await fetch(withBasePath(path), options)
+   if (!res.ok) {
+     throw new Error(await extractErrorMessage(res))
+   }
+@@ -41,7 +43,7 @@ export async function importSkill(file: File): Promise<SkillActionResponse> {
+   const formData = new FormData()
+   formData.set("file", file)
+ 
+-  const res = await fetch("/api/skills/import", {
++  const res = await fetch(withBasePath("/api/skills/import"), {
+     method: "POST",
+     body: formData,
+   })
+diff --git a/web/frontend/src/api/system.ts b/web/frontend/src/api/system.ts
+index 543c869..7ad8646 100644
+--- a/web/frontend/src/api/system.ts
++++ b/web/frontend/src/api/system.ts
+@@ -1,3 +1,5 @@
++import { withBasePath } from "@/lib/runtime"
++
+ export interface AutoStartStatus {
+   enabled: boolean
+   supported: boolean
+@@ -12,7 +14,7 @@ export interface LauncherConfig {
+ }
+ 
+ async function request<T>(path: string, options?: RequestInit): Promise<T> {
+-  const res = await fetch(path, options)
++  const res = await fetch(withBasePath(path), options)
+   if (!res.ok) {
+     let message = `API error: ${res.status} ${res.statusText}`
+     try {
+diff --git a/web/frontend/src/api/tools.ts b/web/frontend/src/api/tools.ts
+index 9f09efb..922581a 100644
+--- a/web/frontend/src/api/tools.ts
++++ b/web/frontend/src/api/tools.ts
+@@ -1,3 +1,5 @@
++import { withBasePath } from "@/lib/runtime"
++
+ export interface ToolSupportItem {
+   name: string
+   description: string
+@@ -16,7 +18,7 @@ interface ToolActionResponse {
+ }
+ 
+ async function request<T>(path: string, options?: RequestInit): Promise<T> {
+-  const res = await fetch(path, options)
++  const res = await fetch(withBasePath(path), options)
+   if (!res.ok) {
+     let message = `API error: ${res.status} ${res.statusText}`
+     try {
 diff --git a/web/frontend/src/components/app-header.tsx b/web/frontend/src/components/app-header.tsx
 index 4f06880..075b6b3 100644
 --- a/web/frontend/src/components/app-header.tsx
@@ -11,6 +392,78 @@ index 4f06880..075b6b3 100644
              </DropdownMenuItem>
            </DropdownMenuContent>
          </DropdownMenu>
+diff --git a/web/frontend/src/components/config/config-page.tsx b/web/frontend/src/components/config/config-page.tsx
+index 24a719d..d103000 100644
+--- a/web/frontend/src/components/config/config-page.tsx
++++ b/web/frontend/src/components/config/config-page.tsx
+@@ -5,6 +5,7 @@ import { useEffect, useState } from "react"
+ import { useTranslation } from "react-i18next"
+ import { toast } from "sonner"
+ 
++import { withBasePath } from "@/lib/runtime"
+ import { patchAppConfig } from "@/api/channels"
+ import {
+   getAutoStartStatus,
+@@ -49,7 +50,7 @@ export function ConfigPage() {
+   const { data, isLoading, error } = useQuery({
+     queryKey: ["config"],
+     queryFn: async () => {
+-      const res = await fetch("/api/config")
++      const res = await fetch(withBasePath("/api/config"))
+       if (!res.ok) {
+         throw new Error("Failed to load config")
+       }
+diff --git a/web/frontend/src/components/config/config-sections.tsx b/web/frontend/src/components/config/config-sections.tsx
+index 1f7426d..c724ccc 100644
+--- a/web/frontend/src/components/config/config-sections.tsx
++++ b/web/frontend/src/components/config/config-sections.tsx
+@@ -2,6 +2,7 @@ import { useState } from "react"
+ import type { ReactNode } from "react"
+ import { useTranslation } from "react-i18next"
+ 
++import { withBasePath } from "@/lib/runtime"
+ import {
+   type CoreConfigForm,
+   DM_SCOPE_OPTIONS,
+@@ -231,7 +232,7 @@ export function ExecSection({ form, onFieldChange }: ExecSectionProps) {
+ 
+     setIsLoading(true)
+     try {
+-      const res = await fetch("/api/config/test-command-patterns", {
++      const res = await fetch(withBasePath("/api/config/test-command-patterns"), {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({
+diff --git a/web/frontend/src/components/config/raw-config-page.tsx b/web/frontend/src/components/config/raw-config-page.tsx
+index e40cc73..26db0e0 100644
+--- a/web/frontend/src/components/config/raw-config-page.tsx
++++ b/web/frontend/src/components/config/raw-config-page.tsx
+@@ -5,6 +5,7 @@ import { useState } from "react"
+ import { useTranslation } from "react-i18next"
+ import { toast } from "sonner"
+ 
++import { withBasePath } from "@/lib/runtime"
+ import { PageHeader } from "@/components/page-header"
+ import {
+   AlertDialog,
+@@ -27,7 +28,7 @@ export function RawConfigPage() {
+   const { data: config, isLoading } = useQuery({
+     queryKey: ["config"],
+     queryFn: async () => {
+-      const res = await fetch("/api/config")
++      const res = await fetch(withBasePath("/api/config"))
+       if (!res.ok) {
+         throw new Error("Failed to fetch config")
+       }
+@@ -37,7 +38,7 @@ export function RawConfigPage() {
+ 
+   const mutation = useMutation({
+     mutationFn: async (newConfig: string) => {
+-      const res = await fetch("/api/config", {
++      const res = await fetch(withBasePath("/api/config"), {
+         method: "PUT",
+         headers: { "Content-Type": "application/json" },
+         body: newConfig,
 diff --git a/web/frontend/src/components/models/provider-label.ts b/web/frontend/src/components/models/provider-label.ts
 index 923cd95..d191255 100644
 --- a/web/frontend/src/components/models/provider-label.ts
@@ -72,3 +525,74 @@ index bdc1fe9..4e8dea2 100644
      fallbackLng: "en",
      debug: false,
  
+diff --git a/web/frontend/src/lib/runtime.ts b/web/frontend/src/lib/runtime.ts
+new file mode 100644
+index 0000000..4428a93
+--- /dev/null
++++ b/web/frontend/src/lib/runtime.ts
+@@ -0,0 +1,35 @@
++declare global {
++  interface Window {
++    __PICOCLAW_BASE_PATH__?: string
++  }
++}
++
++function normalizeBasePath(value: string | undefined): string {
++  const trimmed = value?.trim() ?? ""
++  if (!trimmed || trimmed === "/") {
++    return ""
++  }
++
++  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`
++  return withLeadingSlash.endsWith("/")
++    ? withLeadingSlash.slice(0, -1)
++    : withLeadingSlash
++}
++
++export function getBasePath(): string {
++  return normalizeBasePath(window.__PICOCLAW_BASE_PATH__)
++}
++
++export function getRouterBasePath(): string {
++  return getBasePath() || "/"
++}
++
++export function withBasePath(path: string): string {
++  if (/^[a-z]+:\/\//i.test(path)) {
++    return path
++  }
++
++  const normalizedPath = path.startsWith("/") ? path : `/${path}`
++  const basePath = getBasePath()
++  return basePath ? `${basePath}${normalizedPath}` : normalizedPath
++}
+diff --git a/web/frontend/src/main.tsx b/web/frontend/src/main.tsx
+index 81e72c2..26671ae 100644
+--- a/web/frontend/src/main.tsx
++++ b/web/frontend/src/main.tsx
+@@ -5,11 +5,13 @@ import ReactDOM from "react-dom/client"
+ 
+ import "./i18n"
+ import "./index.css"
++import { getRouterBasePath } from "./lib/runtime"
+ import { routeTree } from "./routeTree.gen"
+ 
+ const queryClient = new QueryClient()
+ 
+ const router = createRouter({
++  basepath: getRouterBasePath(),
+   routeTree,
+   context: {
+     queryClient,
+diff --git a/web/frontend/vite.config.ts b/web/frontend/vite.config.ts
+index 0ef4e14..95be46b 100644
+--- a/web/frontend/vite.config.ts
++++ b/web/frontend/vite.config.ts
+@@ -7,6 +7,7 @@ import { defineConfig } from "vite"
+ 
+ // https://vite.dev/config/
+ export default defineConfig({
++  base: "./",
+   plugins: [
+     tanstackRouter({
+       target: "react",

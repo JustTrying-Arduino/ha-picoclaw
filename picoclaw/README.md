@@ -11,6 +11,7 @@ This add-on is designed for people who want PicoClaw to feel native in Home Assi
 - an editable workspace at `/share/picoclaw/workspace`
 - runtime state isolated under `/data/picoclaw`
 - one Home Assistant option only: `raw_json_config`
+- HA-safe file and skill tools auto-enabled when missing from the JSON
 - `picoclaw-launcher-tui` included for shell troubleshooting
 
 ## Why This Add-on Exists
@@ -52,12 +53,15 @@ Use this add-on when you want PicoClaw in Home Assistant, but still want upstrea
 6. Open it with `Open Web UI`.
 
 If prebuilt registry images are not available yet, Home Assistant can build the add-on locally from the repository Dockerfile.
+Use Home Assistant Ingress as the supported UI path. `:18800` is not considered a stable host URL unless you explicitly publish that port yourself.
 
 ## Configure It
 
 The add-on uses one Home Assistant option only:
 
 - `raw_json_config`
+
+The wrapper always forces the workspace to `/share/picoclaw/workspace` and injects safe file/skill defaults if those tool blocks are absent.
 
 Use the example config here:
 
@@ -66,6 +70,16 @@ Use the example config here:
 Read the full add-on usage guide here:
 
 - [DOCS.md](DOCS.md)
+
+For verbose troubleshooting, add this to your JSON and restart the add-on:
+
+```json
+{
+  "gateway": {
+    "log_level": "debug"
+  }
+}
+```
 
 ## Learn More
 

@@ -56,6 +56,7 @@ The repository now contains a full Home Assistant add-on rebuild in [`picoclaw/`
   `raw_json_config`
 - startup validation that rejects invalid JSON early and writes the normalized config to `/data/picoclaw/config.json`
 - a deterministic workspace contract that always forces PicoClaw onto `/share/picoclaw/workspace`
+- HA-safe file and skill tools injected by default when the user config omits them
 - Home Assistant Ingress as the primary UI via `picoclaw-launcher`
 - English-first launcher defaults with a very small HA-specific patch set
 - optional `.security.yml` compatibility without making it mandatory for first boot
@@ -92,6 +93,8 @@ You paste the full PicoClaw JSON configuration into that field, and the wrapper 
 
 That means Home Assistant remains the config entry point, while PicoClaw keeps its native JSON config model.
 
+The wrapper also injects the core file and skill tools Home Assistant users expect when they are absent from the raw JSON, so a minimal config still results in a usable workspace-aware agent.
+
 If you want a quick starting point, use:
 
 - [`picoclaw/examples/raw_json_config.example.json`](picoclaw/examples/raw_json_config.example.json)
@@ -111,6 +114,7 @@ In practice:
 - optionally pin the add-on in the Home Assistant sidebar for direct access
 
 This repository does not expose host ports by default. Home Assistant handles the embedded UI path through Ingress, which is exactly the experience add-ons are meant to provide.
+The launcher should be treated as an Ingress app first. `http://<host>:18800/` is not part of the stable add-on contract unless a host port is explicitly published later.
 
 Background on Ingress:
 [Presenting your addon](https://developers.home-assistant.io/docs/add-ons/presentation)
@@ -132,6 +136,23 @@ This split is deliberate:
 
 - `/share` is for files you want to edit from File Editor or Samba
 - `/data` is for runtime state the add-on should keep to itself
+
+Once PicoClaw has initialized, the shared workspace should contain files such as `USER.md`, `HEARTBEAT.md`, `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, plus `skills/`, `memory/`, `sessions/`, and `state/`.
+
+For troubleshooting, you can enable detailed gateway logging with:
+
+```json
+{
+  "gateway": {
+    "log_level": "debug"
+  }
+}
+```
+
+In this wrapper that does two things at once:
+
+- it sets the upstream gateway log level to `debug`
+- it makes the launcher start the gateway with `-d --no-truncate`, so detailed logs also appear in the Home Assistant add-on logs
 
 ## Good Sources for Going Further
 

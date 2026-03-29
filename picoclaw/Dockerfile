@@ -1,6 +1,6 @@
 ARG BUILD_FROM
 ARG PICOCLAW_VERSION=v0.2.4
-ARG PICOCLAW_WRAPPER_VERSION=v0.2.4-ha.5
+ARG PICOCLAW_WRAPPER_VERSION=v0.2.4-ha.6
 
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
@@ -84,6 +84,6 @@ COPY run.sh /run.sh
 RUN chmod a+x /run.sh /usr/local/bin/picoclaw /usr/local/bin/picoclaw-launcher /usr/local/bin/picoclaw-launcher-tui
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -q --spider http://127.0.0.1:18800/launcher-login || exit 1
+  CMD wget -q -O /dev/null http://127.0.0.1:18800/api/gateway/status || exit 1
 
 CMD ["/run.sh"]
