@@ -159,6 +159,9 @@ This split is deliberate:
 
 Once PicoClaw has initialized, the shared workspace should contain files such as `USER.md`, `HEARTBEAT.md`, `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, plus `skills/`, `memory/`, `sessions/`, and `state/`.
 
+Builtin skills are copied into `/share/picoclaw/workspace/skills` on first boot so they are visible from Home Assistant File Editor. If you want to disable one, remove its folder from that shared `skills/` directory.
+The wrapper also bootstraps the standard top-level workspace files there, so files like `USER.md`, `HEARTBEAT.md`, `TOOLS.md`, `AGENTS.md`, `SOUL.md`, and `IDENTITY.md` are visible from Home Assistant too.
+
 For troubleshooting, you can enable detailed gateway logging with:
 
 ```json

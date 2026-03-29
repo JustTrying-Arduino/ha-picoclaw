@@ -1,5 +1,5 @@
 diff --git a/web/backend/api/gateway.go b/web/backend/api/gateway.go
-index 4bde5ce..731d047 100644
+index 4bde5ce..b0a25c5 100644
 --- a/web/backend/api/gateway.go
 +++ b/web/backend/api/gateway.go
 @@ -381,7 +381,13 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
@@ -17,7 +17,15 @@ index 4bde5ce..731d047 100644
  	cmd.Env = os.Environ()
  	// Forward the launcher's config path via the environment variable that
  	// GetConfigPath() already reads, so the gateway sub-process uses the same
-@@ -865,6 +871,8 @@ func scanPipe(r io.Reader, buf *LogBuffer) {
+@@ -730,7 +736,6 @@ func (h *Handler) gatewayStatusData() map[string]any {
+ 		gateway.mu.Unlock()
+ 		logger.ErrorC("gateway", fmt.Sprintf("Gateway health check failed: %v", err))
+ 	} else {
+-		logger.InfoC("gateway", fmt.Sprintf("Gateway health status: %d", statusCode))
+ 		if statusCode != http.StatusOK {
+ 			gateway.mu.Lock()
+ 			setGatewayRuntimeStatusLocked("error")
+@@ -865,6 +870,8 @@ func scanPipe(r io.Reader, buf *LogBuffer) {
  	scanner := bufio.NewScanner(r)
  	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
  	for scanner.Scan() {

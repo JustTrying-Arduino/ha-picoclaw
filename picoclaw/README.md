@@ -63,6 +63,9 @@ The add-on uses one Home Assistant option only:
 
 The wrapper always forces the workspace to `/share/picoclaw/workspace` and injects safe file/skill defaults if those tool blocks are absent.
 
+Builtin skills are copied into `/share/picoclaw/workspace/skills` on first boot so they are visible from Home Assistant File Editor. Removing a skill folder from that shared directory disables it for the add-on.
+The wrapper also bootstraps the standard top-level workspace files into `/share/picoclaw/workspace`, so the main PicoClaw markdown files are available from Home Assistant too.
+
 Use the example config here:
 
 - [`examples/raw_json_config.example.json`](examples/raw_json_config.example.json)

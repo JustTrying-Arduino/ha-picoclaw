@@ -1,6 +1,6 @@
 ARG BUILD_FROM
 ARG PICOCLAW_VERSION=v0.2.4
-ARG PICOCLAW_WRAPPER_VERSION=v0.2.4-ha.7
+ARG PICOCLAW_WRAPPER_VERSION=v0.2.4-ha.9
 
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
@@ -79,7 +79,7 @@ RUN addgroup -S picoclaw && adduser -S -D -H -h /data/picoclaw -G picoclaw picoc
 COPY --from=builder /out/picoclaw /usr/local/bin/picoclaw
 COPY --from=builder /out/picoclaw-launcher /usr/local/bin/picoclaw-launcher
 COPY --from=builder /out/picoclaw-launcher-tui /usr/local/bin/picoclaw-launcher-tui
-COPY --from=builder /src/workspace/skills /usr/local/share/picoclaw/skills
+COPY --from=builder /src/workspace /usr/local/share/picoclaw/workspace
 COPY run.sh /run.sh
 
 RUN chmod a+x /run.sh /usr/local/bin/picoclaw /usr/local/bin/picoclaw-launcher /usr/local/bin/picoclaw-launcher-tui

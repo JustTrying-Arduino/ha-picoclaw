@@ -11,6 +11,9 @@ readonly RUNTIME_CONFIG="${RUNTIME_HOME}/config.json"
 readonly RUNTIME_SECURITY_FILE="${RUNTIME_HOME}/.security.yml"
 readonly RUNTIME_LAUNCHER_CONFIG="${RUNTIME_HOME}/launcher-config.json"
 readonly RUNTIME_WORKSPACE_LINK="${RUNTIME_HOME}/workspace"
+readonly RUNTIME_WORKSPACE_TEMPLATES_MARKER="${RUNTIME_HOME}/.workspace-templates-bootstrapped"
+
+readonly WORKSPACE_TEMPLATES_SOURCE="/usr/local/share/picoclaw/workspace"
 
 readonly PICOCLAW_UID="1000"
 readonly PICOCLAW_GID="1000"
@@ -78,6 +81,43 @@ ensure_workspace_symlink() {
     fi
 
     ln -s "${SHARED_WORKSPACE}" "${RUNTIME_WORKSPACE_LINK}"
+}
+
+bootstrap_workspace_templates() {
+    local copied_count source_path relative_path target_path
+
+    if [ -f "${RUNTIME_WORKSPACE_TEMPLATES_MARKER}" ]; then
+        return
+    fi
+
+    if [ ! -d "${WORKSPACE_TEMPLATES_SOURCE}" ]; then
+        bashio::log.warning "Workspace templates source ${WORKSPACE_TEMPLATES_SOURCE} is missing."
+        return
+    fi
+
+    copied_count=0
+
+    while IFS= read -r source_path; do
+        relative_path="${source_path#${WORKSPACE_TEMPLATES_SOURCE}/}"
+        target_path="${SHARED_WORKSPACE}/${relative_path}"
+
+        if [ -d "${source_path}" ]; then
+            mkdir -p "${target_path}"
+            continue
+        fi
+
+        if [ -e "${target_path}" ]; then
+            continue
+        fi
+
+        mkdir -p "$(dirname "${target_path}")"
+        cp -a "${source_path}" "${target_path}"
+        copied_count=$((copied_count + 1))
+    done < <(find "${WORKSPACE_TEMPLATES_SOURCE}" -mindepth 1 | sort)
+
+    touch "${RUNTIME_WORKSPACE_TEMPLATES_MARKER}"
+    chown -R "${PICOCLAW_UID}:${PICOCLAW_GID}" "${SHARED_WORKSPACE}" "${RUNTIME_WORKSPACE_TEMPLATES_MARKER}"
+    bashio::log.info "Bootstrapped ${copied_count} workspace template file(s) into ${SHARED_WORKSPACE}"
 }
 
 log_workspace_diagnostics() {
@@ -151,9 +191,11 @@ write_runtime_config() {
             .agents.defaults = (.agents.defaults // {}) |
             .gateway = (.gateway // {}) |
             .tools = (.tools // {}) |
+            .tools.web = (.tools.web // {}) |
             .agents.defaults.workspace = $workspace |
             ensure_default(["gateway", "host"]; "127.0.0.1") |
             ensure_default_port(["gateway", "port"]; 18790) |
+            if .tools.web.prefer_native == null then .tools.web.prefer_native = false else . end |
             ensure_enabled(["tools", "skills", "enabled"]) |
             ensure_enabled(["tools", "find_skills", "enabled"]) |
             ensure_enabled(["tools", "install_skill", "enabled"]) |
@@ -178,7 +220,6 @@ start_launcher() {
     export PICOCLAW_CONFIG="${RUNTIME_CONFIG}"
     export PICOCLAW_BINARY="/usr/local/bin/picoclaw"
     export PICOCLAW_GATEWAY_HOST="0.0.0.0"
-    export PICOCLAW_BUILTIN_SKILLS="/usr/local/share/picoclaw/skills"
     export LANG="en_US.UTF-8"
     export LC_ALL="en_US.UTF-8"
 
@@ -202,6 +243,7 @@ start_launcher() {
 
 ensure_directories
 ensure_workspace_symlink
+bootstrap_workspace_templates
 log_workspace_diagnostics
 copy_optional_security_file
 write_launcher_config

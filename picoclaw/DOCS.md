@@ -81,7 +81,9 @@ What to expect in the shared workspace after PicoClaw initializes:
 
 If you inspect `/data/picoclaw/workspace`, that path should resolve to the same shared workspace through a symlink. The reference location to check from Home Assistant is always `/share/picoclaw/workspace`.
 
-Builtin skills shipped by upstream are also bundled inside the add-on image. They are available to the launcher and agent even if they are not copied into `/share/picoclaw/workspace/skills`.
+Builtin skills shipped by upstream are copied into `/share/picoclaw/workspace/skills` on first boot. This makes them visible from Home Assistant File Editor and allows you to disable one by deleting its folder from the shared workspace.
+
+The wrapper also bootstraps the standard top-level workspace files into `/share/picoclaw/workspace` on first boot, including files such as `USER.md`, `HEARTBEAT.md`, `TOOLS.md`, `AGENTS.md`, `SOUL.md`, and `IDENTITY.md`.
 
 ## Configuration Contract
 
