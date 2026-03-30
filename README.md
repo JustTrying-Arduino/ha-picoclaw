@@ -53,9 +53,10 @@ This means you can tune every aspect of the agent's behaviour from within HA:
 | File / Folder | What you can change |
 |---|---|
 | `USER.md` | Who the agent thinks it's talking to — your preferences, context, habits |
-| `AGENTS.md` | Agent roles and personas |
-| `IDENTITY.md` · `SOUL.md` | The agent's core personality and values |
+| `AGENT.md` · `SOUL.md` | The agent's main persona, behavior, and values |
+| `TOOLS.md` | Workspace-specific rules and preferences for tool usage |
 | `HEARTBEAT.md` | Periodic self-reflection prompts |
+| `config.full.json` | The full editable shared PicoClaw config used by the add-on |
 | `skills/` | Add, edit, or disable agent skills (remove a folder to disable) |
 | `memory/` | Browse and edit the agent's long-term memory |
 | `sessions/` | Inspect past conversations |
@@ -92,7 +93,8 @@ No terminal, no Docker, no manual file mounting — everything stays inside Home
 
 ## Configuration Examples
 
-The add-on exposes a single option: `raw_json_config`. Paste a PicoClaw JSON object, and the wrapper handles the rest.
+The add-on exposes a single option: `raw_json_config`. On first boot, the wrapper uses it to seed `/share/picoclaw/workspace/config.full.json`, then that shared file becomes the editable source of truth used by the launcher and gateway.
+Sensitive values are kept out of `config.full.json`; use the launcher UI or `/share/picoclaw/.security.yml` for secrets.
 
 > You don't need to specify workspace paths, file tools, or skill tools — the wrapper injects them automatically if missing.
 
@@ -186,7 +188,7 @@ Open it from the add-on page (**Open Web UI**) or pin it to the HA sidebar for o
 
 ### Smart Config Defaults
 
-Every time the add-on starts, the wrapper normalizes your JSON:
+Every time the add-on starts, the wrapper normalizes the effective shared config:
 
 | Setting | Behavior |
 |---|---|
@@ -204,7 +206,7 @@ Invalid JSON is rejected at startup with a clear error — the add-on fails fast
 
 ## Debugging
 
-Add this to your `raw_json_config` and restart:
+Add this to `raw_json_config` before first boot, or to `/share/picoclaw/workspace/config.full.json` afterwards, then restart:
 
 ```json
 {
@@ -214,7 +216,7 @@ Add this to your `raw_json_config` and restart:
 }
 ```
 
-This enables verbose logging in the HA add-on logs: gateway traffic, tool calls, prompts, and non-truncated output.
+This enables verbose logging in the HA add-on logs: gateway traffic, prompts, tool calls, cron activity, heartbeat activity, and non-truncated output. The wrapper still suppresses the noisy recurring `Gateway health status: 200` line.
 
 For optional security configuration, place a `.security.yml` file in `/share/picoclaw/` — the wrapper copies it to the runtime directory at each startup.
 
@@ -235,12 +237,15 @@ The wrapper applies a single small patch on the upstream code (for Ingress compa
 
 ```
 /share/picoclaw/                  <-- Editable (File Editor, Samba, SSH)
-  workspace/                      <-- Agent workspace (USER.md, skills/, memory/, sessions/, etc.)
+  workspace/                      <-- Agent workspace (AGENT.md, USER.md, TOOLS.md, config.full.json, ...)
+  workspace/config.full.json      <-- Full normalized shared config used by the add-on
+  workspace/launcher-config.json  <-- Launcher web settings managed by the wrapper/UI
   .security.yml                   <-- Optional, copied to runtime at startup
 
 /data/picoclaw/                   <-- Managed by the add-on (not user-facing)
-  config.json                     <-- Normalized config (written each boot)
-  launcher-config.json            <-- Launcher port config
+  config.json                     <-- Symlink to workspace/config.full.json
+  launcher-config.json            <-- Symlink to workspace/launcher-config.json
+  .security.yml                   <-- Runtime secrets file, kept outside the workspace
   workspace -> /share/...         <-- Symlink to shared workspace
 ```
 

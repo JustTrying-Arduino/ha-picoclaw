@@ -604,3 +604,215 @@ index 0ef4e14..95be46b 100644
    plugins: [
      tanstackRouter({
        target: "react",
+diff --git a/pkg/agent/context.go b/pkg/agent/context.go
+index 12e3cdd..1bbfe3e 100644
+--- a/pkg/agent/context.go
++++ b/pkg/agent/context.go
+@@ -451,6 +451,10 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
+ 	if agentDefinition.User != nil {
+ 		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
+ 	}
++	filePath := filepath.Join(cb.workspace, "TOOLS.md")
++	if data, err := os.ReadFile(filePath); err == nil {
++		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "TOOLS.md", data)
++	}
+ 
+ 	if agentDefinition.Source != AgentDefinitionSourceAgent {
+ 		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
+diff --git a/pkg/agent/definition.go b/pkg/agent/definition.go
+index cf73d60..27a243a 100644
+--- a/pkg/agent/definition.go
++++ b/pkg/agent/definition.go
+@@ -121,6 +121,7 @@ func (definition AgentContextDefinition) trackedPaths(workspace string) []string
+ 	paths := []string{
+ 		filepath.Join(workspace, string(AgentDefinitionSourceAgent)),
+ 		filepath.Join(workspace, "SOUL.md"),
++		filepath.Join(workspace, "TOOLS.md"),
+ 		filepath.Join(workspace, "USER.md"),
+ 	}
+ 	if definition.Source != AgentDefinitionSourceAgent {
+diff --git a/pkg/agent/loop.go b/pkg/agent/loop.go
+index c9efb31..8966c3d 100644
+--- a/pkg/agent/loop.go
++++ b/pkg/agent/loop.go
+@@ -1222,7 +1222,66 @@ func (al *AgentLoop) ProcessDirectWithChannel(
+ 		SessionKey: sessionKey,
+ 	}
+ 
+-	return al.processMessage(ctx, msg)
++	response, err := al.processMessage(ctx, msg)
++	finalResponse := response
++	if err != nil {
++		finalResponse = fmt.Sprintf("Error processing message: %v", err)
++	}
++
++	target, targetErr := al.buildContinuationTarget(msg)
++	if targetErr != nil {
++		logger.WarnCF("agent", "Failed to build direct continuation target",
++			map[string]any{
++				"channel": channel,
++				"chat_id": chatID,
++				"error":   targetErr.Error(),
++			})
++		return finalResponse, err
++	}
++
++	if target != nil {
++		for al.pendingSteeringCountForScope(target.SessionKey) > 0 {
++			logger.InfoCF("agent", "Continuing queued steering after direct turn",
++				map[string]any{
++					"channel":     target.Channel,
++					"chat_id":     target.ChatID,
++					"session_key": target.SessionKey,
++					"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
++				})
++
++			continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID)
++			if continueErr != nil {
++				logger.WarnCF("agent", "Failed to continue queued steering after direct turn",
++					map[string]any{
++						"channel": target.Channel,
++						"chat_id": target.ChatID,
++						"error":   continueErr.Error(),
++					})
++				if err == nil {
++					err = continueErr
++					finalResponse = fmt.Sprintf("Error processing message: %v", continueErr)
++				}
++				break
++			}
++			if continued == "" {
++				break
++			}
++
++			finalResponse = continued
++		}
++	}
++
++	if channel != "cli" && finalResponse != "" {
++		publishChannel := channel
++		publishChatID := chatID
++		if target != nil {
++			publishChannel = target.Channel
++			publishChatID = target.ChatID
++		}
++		al.publishResponseIfNeeded(ctx, publishChannel, publishChatID, finalResponse)
++	}
++
++	return finalResponse, err
+ }
+ 
+ // ProcessHeartbeat processes a heartbeat request without session history.
+@@ -2309,6 +2368,7 @@ turnLoop:
+ 			// Send tool feedback to chat channel if enabled (from HEAD)
+ 			if al.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
+ 				ts.channel != "" &&
++				!strings.EqualFold(ts.channel, "telegram") &&
+ 				!ts.opts.SuppressToolFeedback {
+ 				feedbackPreview := utils.Truncate(
+ 					string(argsJSON),
+diff --git a/pkg/agent/loop_test.go b/pkg/agent/loop_test.go
+index 341d15a..8dc17de 100644
+--- a/pkg/agent/loop_test.go
++++ b/pkg/agent/loop_test.go
+@@ -1943,6 +1943,54 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
+ 	}
+ }
+ 
++func TestProcessDirectWithChannel_PublishesOutboundForRemoteChannel(t *testing.T) {
++	tmpDir := t.TempDir()
++
++	cfg := &config.Config{
++		Agents: config.AgentsConfig{
++			Defaults: config.AgentDefaults{
++				Workspace:         tmpDir,
++				ModelName:         "test-model",
++				MaxTokens:         4096,
++				MaxToolIterations: 3,
++			},
++		},
++	}
++
++	msgBus := bus.NewMessageBus()
++	provider := &simpleMockProvider{response: "cron answer"}
++	al := NewAgentLoop(cfg, msgBus, provider)
++
++	response, err := al.ProcessDirectWithChannel(
++		context.Background(),
++		"hello",
++		"cron-session",
++		"telegram",
++		"chat-1",
++	)
++	if err != nil {
++		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
++	}
++	if response != "cron answer" {
++		t.Fatalf("response = %q, want %q", response, "cron answer")
++	}
++
++	select {
++	case outbound := <-msgBus.OutboundChan():
++		if outbound.Channel != "telegram" {
++			t.Fatalf("outbound channel = %q, want %q", outbound.Channel, "telegram")
++		}
++		if outbound.ChatID != "chat-1" {
++			t.Fatalf("outbound chatID = %q, want %q", outbound.ChatID, "chat-1")
++		}
++		if outbound.Content != "cron answer" {
++			t.Fatalf("outbound content = %q, want %q", outbound.Content, "cron answer")
++		}
++	case <-time.After(2 * time.Second):
++		t.Fatal("expected direct processing to publish an outbound message")
++	}
++}
++
+ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
+ 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+ 	if err != nil {
+diff --git a/pkg/config/security.go b/pkg/config/security.go
+index 47ad1a5..3f58ce0 100644
+--- a/pkg/config/security.go
++++ b/pkg/config/security.go
+@@ -22,7 +22,8 @@ import (
+ )
+ 
+ const (
+-	SecurityConfigFile = ".security.yml"
++	SecurityConfigFile   = ".security.yml"
++	SecurityConfigDirEnv = "PICOCLAW_SECURITY_DIR"
+ )
+ 
+ func normalizeSecurityConfig(sec *SecurityConfig) *SecurityConfig {
+@@ -185,6 +186,9 @@ type ClawHubSecurity struct {
+ 
+ // securityPath returns the path to security.yml relative to the config file
+ func securityPath(configPath string) string {
++	if overrideDir := strings.TrimSpace(os.Getenv(SecurityConfigDirEnv)); overrideDir != "" {
++		return filepath.Join(overrideDir, SecurityConfigFile)
++	}
+ 	configDir := filepath.Dir(configPath)
+ 	return filepath.Join(configDir, SecurityConfigFile)
+ }
+diff --git a/pkg/gateway/gateway.go b/pkg/gateway/gateway.go
+index 03d7dfe..8a4afd4 100644
+--- a/pkg/gateway/gateway.go
++++ b/pkg/gateway/gateway.go
+@@ -6,6 +6,7 @@ import (
+ 	"os"
+ 	"os/signal"
+ 	"path/filepath"
++	"strings"
+ 	"sync"
+ 	"sync/atomic"
+ 	"syscall"
+@@ -646,6 +647,9 @@ func setupCronTool(
+ 	if cronTool != nil {
+ 		cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
+ 			result := cronTool.ExecuteJob(context.Background(), job)
++			if strings.HasPrefix(result, "Error:") {
++				return result, fmt.Errorf(strings.TrimSpace(strings.TrimPrefix(result, "Error:")))
++			}
+ 			return result, nil
+ 		})
+ 	}
