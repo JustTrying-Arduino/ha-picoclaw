@@ -37,12 +37,12 @@ PicoClaw is a powerful AI agent runtime: chat interface, gateway, skills, tools,
 
 This add-on gives you all of that with Home Assistant ergonomics:
 
-| Feature | Standalone PicoClaw | This Add-on |
-|---|---|---|
-| Install | Manual Docker setup | One-click from the HA add-on store |
-| UI access | `http://host:18800` | HA sidebar via Ingress |
-| Persistence | You manage volumes | Automatic across restarts and updates |
-| **Agent workspace** | **Wherever you mount it** | **Fully editable from HA — see below** |
+| Feature | |
+|---|---|
+| Install | One-click from the HA add-on store |
+| UI access | HA sidebar via Ingress |
+| Persistence | Automatic across restarts and updates |
+| **Agent workspace** | **Fully editable from HA — see below** |
 
 ### 🗂️ Edit everything directly from Home Assistant
 
