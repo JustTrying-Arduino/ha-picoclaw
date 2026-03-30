@@ -66,17 +66,19 @@ Sequence executee au lancement du container :
 
 1. **`ensure_directories`** — Cree `/share/picoclaw/`, `/share/picoclaw/workspace/`, `/data/picoclaw/`
 2. **`ensure_workspace_symlink`** — `/data/picoclaw/workspace` → symlink vers `/share/picoclaw/workspace` (avec migration legacy si ancien format)
-3. **`bootstrap_workspace_templates`** — **Premier demarrage uniquement** (marker `.workspace-templates-bootstrapped`) : copie les fichiers templates depuis `/usr/local/share/picoclaw/workspace` (bundlés dans l'image) vers `/share/picoclaw/workspace`, sans ecraser les fichiers existants
-4. **`log_workspace_diagnostics`** — Log les chemins et verifie la coherence du symlink
-5. **`copy_optional_security_file`** — Copie `.security.yml` de `/share` vers `/data` si present. Ignore `config.override.json` (prevention split-brain)
-6. **`write_launcher_config`** — Ecrit `launcher-config.json` (`{"port": 18800, "public": true}`)
-7. **`write_runtime_config`** — Lit `raw_json_config` des options HA, valide le JSON, normalise via `jq` :
+3. **`ensure_runtime_config_links`** — Cree `/data/picoclaw/config.json` et `/data/picoclaw/launcher-config.json` comme symlinks vers les fichiers partages du workspace
+4. **`bootstrap_workspace_templates`** — **Premier demarrage uniquement** (marker `.workspace-templates-bootstrapped`) : copie les fichiers templates depuis `/usr/local/share/picoclaw/workspace` (bundlés dans l'image) vers `/share/picoclaw/workspace`, sans ecraser les fichiers existants
+5. **`bootstrap_wrapper_workspace_files`** — Assure la presence de `TOOLS.md` et `HEARTBEAT.md` dans le workspace partage
+6. **`log_workspace_diagnostics`** — Log les chemins et verifie la coherence du symlink
+7. **`copy_optional_security_file`** — Copie `.security.yml` de `/share` vers `/data` si present. Ignore `config.override.json`
+8. **`write_launcher_config`** — Ecrit `launcher-config.json` dans le workspace partage (`{"port": 18800, "public": true}`)
+9. **`write_runtime_config`** — Utilise `/share/picoclaw/workspace/config.full.json` comme source de verite si present, sinon seed depuis `raw_json_config`, puis normalise via `jq` :
    - Force `agents.defaults.workspace` = `/share/picoclaw/workspace`
    - Defaults `gateway.host` = `127.0.0.1`, `gateway.port` = `18790`
    - Force `tools.web.prefer_native` = `false` si absent
    - Auto-active les tools fichier + skills si absents
    - Force `version = 1`, trie les cles
-8. **`start_launcher`** — Configure les env vars, detecte `gateway.log_level = "debug"`, lance `picoclaw-launcher` via `su-exec` (uid 1000)
+10. **`start_launcher`** — Configure les env vars, ancre `.security.yml` sur `/data/picoclaw`, detecte `gateway.log_level = "debug"`, lance `picoclaw-launcher` via `su-exec` (uid 1000)
 
 ---
 
@@ -105,12 +107,14 @@ Sequence executee au lancement du container :
 
 ```
 /share/picoclaw/                  ← Editable par l'utilisateur (File Editor, Samba, SSH)
-├── workspace/                    ← Workspace de l'agent (USER.md, memory/, skills/, sessions/, etc.)
+├── workspace/                    ← Workspace de l'agent (AGENT.md, USER.md, TOOLS.md, skills/, etc.)
+│   ├── config.full.json          ← Config partagee editable utilisee par le launcher et le gateway
+│   └── launcher-config.json      ← Config launcher ecrite dans le meme dossier
 └── .security.yml                 ← Optionnel, copie vers /data au demarrage
 
 /data/picoclaw/                   ← Gere par le add-on (pas d'acces direct utilisateur)
-├── config.json                   ← Config normalisee (chmod 600)
-├── launcher-config.json          ← {"port": 18800, "public": true}
+├── config.json → /share/picoclaw/workspace/config.full.json
+├── launcher-config.json → /share/picoclaw/workspace/launcher-config.json
 ├── .security.yml                 ← Copie depuis /share si present
 ├── .workspace-templates-bootstrapped  ← Marker : templates deja copies (1er demarrage)
 ├── workspace → /share/picoclaw/workspace  ← Symlink
@@ -126,7 +130,10 @@ Unique patch applique sur le code upstream. 598 lignes. Modifie 21 fichiers.
 ### Backend (Go)
 | Fichier | Modification |
 |---------|-------------|
-| `web/backend/api/gateway.go` | Ajoute flags `-d --no-truncate` si `log_level=debug` ; echo stdout des logs gateway |
+| `web/backend/api/gateway.go` | Ajoute flags `-d --no-truncate` si `log_level=debug` ; echo stdout des logs gateway ; garde masque le healthcheck 200 recurrent |
+| `pkg/agent/loop.go` | Masque les tool feedbacks inline dans Telegram uniquement |
+| `pkg/agent/context.go` + `pkg/agent/definition.go` | Charge `TOOLS.md` dans le prompt systeme et l'ajoute au suivi cache/mtime |
+| `pkg/config/security.go` | Permet d'ancrer `.security.yml` sur `/data/picoclaw` meme si la config principale est dans `/share` |
 | `web/backend/api/gateway_host.go` | Detecte header `X-Ingress-Path` et passe le base path au frontend |
 | `web/backend/embed.go` | Injecte `window.__PICOCLAW_BASE_PATH__` dans le HTML servi |
 

@@ -39,7 +39,8 @@ The wrapper will then:
 - validate the JSON with `jq`
 - reject empty input
 - require a JSON object
-- write the normalized result to `/data/picoclaw/config.json`
+- seed `/share/picoclaw/workspace/config.full.json` if it does not exist yet
+- normalize the effective shared config on every boot
 - force `agents.defaults.workspace` to `/share/picoclaw/workspace`
 - auto-enable HA-safe file and skill tools if they are absent from the JSON:
   `skills`, `find_skills`, `install_skill`, `list_dir`, `read_file`, `write_file`, `append_file`, `edit_file`
@@ -55,12 +56,14 @@ Starter example:
 User-editable workspace:
 
 - `/share/picoclaw/workspace`
+- `/share/picoclaw/workspace/config.full.json`
+- `/share/picoclaw/workspace/launcher-config.json`
 
 Internal runtime state:
 
-- `/data/picoclaw/config.json`
 - `/data/picoclaw/.security.yml`
-- `/data/picoclaw/launcher-config.json`
+- `/data/picoclaw/config.json -> /share/picoclaw/workspace/config.full.json`
+- `/data/picoclaw/launcher-config.json -> /share/picoclaw/workspace/launcher-config.json`
 - `/data/picoclaw/logs`
 - `/data/picoclaw/workspace -> /share/picoclaw/workspace`
 
@@ -68,22 +71,22 @@ Important: `/share` was chosen for editability from File Editor and Samba, not f
 
 What to expect in the shared workspace after PicoClaw initializes:
 
+- `AGENT.md`
 - `USER.md`
 - `HEARTBEAT.md`
 - `TOOLS.md`
-- `AGENTS.md`
-- `IDENTITY.md`
 - `SOUL.md`
 - `memory/`
 - `skills/`
-- `sessions/`
-- `state/`
+- `config.full.json`
+
+Runtime-created folders such as `sessions/`, `state/`, and `cron/` appear as the agent starts working.
 
 If you inspect `/data/picoclaw/workspace`, that path should resolve to the same shared workspace through a symlink. The reference location to check from Home Assistant is always `/share/picoclaw/workspace`.
 
 Builtin skills shipped by upstream are copied into `/share/picoclaw/workspace/skills` on first boot. This makes them visible from Home Assistant File Editor and allows you to disable one by deleting its folder from the shared workspace.
 
-The wrapper also bootstraps the standard top-level workspace files into `/share/picoclaw/workspace` on first boot, including files such as `USER.md`, `HEARTBEAT.md`, `TOOLS.md`, `AGENTS.md`, `SOUL.md`, and `IDENTITY.md`.
+The wrapper also bootstraps top-level workspace files into `/share/picoclaw/workspace`. Upstream provides files such as `AGENT.md`, `USER.md`, and `SOUL.md`; the Home Assistant wrapper additionally ensures `TOOLS.md` and `HEARTBEAT.md` are present even when upstream did not pre-create them.
 
 ## Configuration Contract
 
@@ -95,7 +98,9 @@ Rules:
 
 - it must be valid JSON
 - it must parse to a JSON object
-- on every boot, the wrapper writes it to `/data/picoclaw/config.json`
+- if `/share/picoclaw/workspace/config.full.json` is missing, the wrapper seeds it from `raw_json_config`
+- on every boot, the wrapper normalizes `/share/picoclaw/workspace/config.full.json`
+- sensitive values are kept in `/data/picoclaw/.security.yml` (or seeded from `/share/picoclaw/.security.yml`), not in `config.full.json`
 - on every boot, the wrapper forces `agents.defaults.workspace` to `/share/picoclaw/workspace`
 - if the HA-safe file and skill tools are absent, the wrapper injects them automatically
 
@@ -269,6 +274,8 @@ In the Home Assistant wrapper, `gateway.log_level = "debug"` has an extra meanin
 - it keeps the upstream debug log level
 - it also starts `picoclaw gateway` with `-d --no-truncate`
 - gateway subprocess logs are relayed into the add-on console logs
+- the wrapper still suppresses the recurring `Gateway health status: 200` noise line
+- inline tool feedback messages are still hidden in Telegram chats even though tool calls remain visible in the add-on logs
 
 Recommended debug flow:
 
