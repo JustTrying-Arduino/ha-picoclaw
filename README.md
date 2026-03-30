@@ -21,7 +21,6 @@ Run [PicoClaw](https://github.com/sipeed/picoclaw) — an open-source AI agent r
   - [Full Example](#full-example)
 - [What the Wrapper Does for You](#what-the-wrapper-does-for-you)
   - [Accessible UI via Ingress](#accessible-ui-via-ingress)
-  - [Accessible Files via /share](#accessible-files-via-share)
   - [Smart Config Defaults](#smart-config-defaults)
 - [Debugging](#debugging)
 - [Architecture](#architecture)
@@ -42,10 +41,26 @@ This add-on gives you all of that with Home Assistant ergonomics:
 |---|---|---|
 | Install | Manual Docker setup | One-click from the HA add-on store |
 | UI access | `http://host:18800` | HA sidebar via Ingress |
-| Configuration | Edit JSON files manually | Paste JSON in the HA add-on config tab |
-| Agent workspace | Wherever you mount it | `/share/picoclaw/workspace` — editable from File Editor, Samba, SSH |
 | Persistence | You manage volumes | Automatic across restarts and updates |
-| Updates | Pull images manually | Tracked automatically via GitHub Actions |
+| **Agent workspace** | **Wherever you mount it** | **Fully editable from HA — see below** |
+
+### 🗂️ Edit everything directly from Home Assistant
+
+The entire agent workspace lives at `/share/picoclaw/workspace`, accessible from **File Editor**, **Samba**, or **SSH** — without leaving Home Assistant.
+
+This means you can tune every aspect of the agent's behaviour from within HA:
+
+| File / Folder | What you can change |
+|---|---|
+| `USER.md` | Who the agent thinks it's talking to — your preferences, context, habits |
+| `AGENTS.md` | Agent roles and personas |
+| `IDENTITY.md` · `SOUL.md` | The agent's core personality and values |
+| `HEARTBEAT.md` | Periodic self-reflection prompts |
+| `skills/` | Add, edit, or disable agent skills (remove a folder to disable) |
+| `memory/` | Browse and edit the agent's long-term memory |
+| `sessions/` | Inspect past conversations |
+
+No terminal, no Docker, no manual file mounting — everything stays inside Home Assistant.
 
 ---
 
@@ -168,16 +183,6 @@ The full PicoClaw launcher UI runs inside Home Assistant through Ingress — no 
 - Raw config editor, logs, tools, and skills management
 
 Open it from the add-on page (**Open Web UI**) or pin it to the HA sidebar for one-click access.
-
-### Accessible Files via /share
-
-The agent workspace lives at `/share/picoclaw/workspace`. This means you can browse and edit all agent files directly from Home Assistant:
-
-- **File Editor add-on** — edit `USER.md`, skills, memory files from the browser
-- **Samba add-on** — access the workspace from your computer's file explorer
-- **SSH** — full shell access to the workspace
-
-On first boot, the wrapper populates the workspace with PicoClaw's standard template files (`USER.md`, `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `HEARTBEAT.md`, etc.) and builtin skills. Existing files are never overwritten.
 
 ### Smart Config Defaults
 
