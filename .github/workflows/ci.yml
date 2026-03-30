@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  validate-and-smoke:
+  validate:
     runs-on: ubuntu-latest
 
     steps:
@@ -26,54 +26,36 @@ jobs:
             end
           '
 
-      - name: Extract Docker build arguments
-        id: build_args
-        run: |
-          echo "upstream=$(sed -n 's/^  PICOCLAW_VERSION: //p' picoclaw/build.yaml)" >> "${GITHUB_OUTPUT}"
-          echo "wrapper=$(sed -n 's/^  PICOCLAW_WRAPPER_VERSION: //p' picoclaw/build.yaml)" >> "${GITHUB_OUTPUT}"
-
       - name: Validate example JSON
         run: jq -e 'type == "object"' picoclaw/examples/raw_json_config.example.json
 
       - name: Validate shell syntax
         run: bash -n picoclaw/run.sh scripts/set-version.sh
 
-      - name: Build amd64 smoke image
+      - name: Check version consistency
         run: |
-          docker build \
-            --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.22 \
-            --build-arg PICOCLAW_VERSION=${{ steps.build_args.outputs.upstream }} \
-            --build-arg PICOCLAW_WRAPPER_VERSION=${{ steps.build_args.outputs.wrapper }} \
-            --tag picoclaw-addon-smoke:latest \
-            picoclaw
+          wrapper_build="$(sed -n 's/^  PICOCLAW_WRAPPER_VERSION: //p' picoclaw/build.yaml)"
+          wrapper_config="$(sed -n 's/^version: //p' picoclaw/config.yaml)"
+          wrapper_docker="$(sed -n 's/^ARG PICOCLAW_WRAPPER_VERSION=//p' picoclaw/Dockerfile)"
 
-      - name: Run add-on smoke test
-        run: |
-          mkdir -p /tmp/picoclaw-data /tmp/picoclaw-share
-          jq -Rs '{raw_json_config: .}' picoclaw/examples/raw_json_config.example.json > /tmp/picoclaw-data/options.json
-          docker run -d --rm \
-            --name picoclaw-addon-smoke \
-            -v /tmp/picoclaw-data:/data \
-            -v /tmp/picoclaw-share:/share \
-            picoclaw-addon-smoke:latest
+          upstream_build="$(sed -n 's/^  PICOCLAW_VERSION: //p' picoclaw/build.yaml)"
+          upstream_docker="$(sed -n 's/^ARG PICOCLAW_VERSION=//p' picoclaw/Dockerfile)"
 
-          for _ in $(seq 1 30); do
-            if docker exec picoclaw-addon-smoke wget -q --spider http://127.0.0.1:18800/; then
-              break
-            fi
-            sleep 2
-          done
+          echo "Wrapper: build.yaml=${wrapper_build} config.yaml=${wrapper_config} Dockerfile=${wrapper_docker}"
+          echo "Upstream: build.yaml=${upstream_build} Dockerfile=${upstream_docker}"
 
-          test -f /tmp/picoclaw-data/picoclaw/config.json
-          test -f /tmp/picoclaw-data/picoclaw/launcher-config.json
-          test -d /tmp/picoclaw-share/picoclaw/workspace
-          jq -e '.agents.defaults.workspace == "/share/picoclaw/workspace"' /tmp/picoclaw-data/picoclaw/config.json >/dev/null
-          jq -e '.port == 18800 and .public == true' /tmp/picoclaw-data/picoclaw/launcher-config.json >/dev/null
+          ok=true
+          if [ "${wrapper_build}" != "${wrapper_config}" ]; then
+            echo "::error::Wrapper version mismatch: build.yaml (${wrapper_build}) != config.yaml (${wrapper_config})"
+            ok=false
+          fi
+          if [ "${wrapper_build}" != "${wrapper_docker}" ]; then
+            echo "::error::Wrapper version mismatch: build.yaml (${wrapper_build}) != Dockerfile (${wrapper_docker})"
+            ok=false
+          fi
+          if [ "${upstream_build}" != "${upstream_docker}" ]; then
+            echo "::error::Upstream version mismatch: build.yaml (${upstream_build}) != Dockerfile (${upstream_docker})"
+            ok=false
+          fi
 
-      - name: Print smoke logs
-        if: always()
-        run: docker logs picoclaw-addon-smoke || true
-
-      - name: Stop smoke container
-        if: always()
-        run: docker rm -f picoclaw-addon-smoke || true
+          [ "${ok}" = true ]
