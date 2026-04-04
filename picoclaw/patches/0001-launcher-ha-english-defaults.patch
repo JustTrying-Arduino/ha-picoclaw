@@ -459,6 +459,18 @@ index b54e55b..01c08c4 100644
  	cmd.Env = os.Environ()
  	// Forward the launcher's config path via the environment variable that
  	// GetConfigPath() already reads, so the gateway sub-process uses the same
+@@ -1014,8 +1016,10 @@ func (h *Handler) handleGetGatewayLogs(w http.ResponseWriter, r *http.Request) {
+ // scanPipe reads lines from r and appends them to buf. Returns when r reaches EOF.
+ func scanPipe(r io.Reader, buf *LogBuffer) {
+ 	scanner := bufio.NewScanner(r)
+ 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+ 	for scanner.Scan() {
+-		buf.Append(scanner.Text())
++		line := scanner.Text()
++		buf.Append(line)
++		fmt.Fprintln(os.Stdout, line)
+ 	}
+ }
 diff --git a/web/backend/api/gateway_host.go b/web/backend/api/gateway_host.go
 index f8e8ead..2d2dffe 100644
 --- a/web/backend/api/gateway_host.go
@@ -798,3 +810,76 @@ index 0ef4e14..95be46b 100644
    plugins: [
      tanstackRouter({
        target: "react",
+diff --git a/web/frontend/src/components/models/provider-label.ts b/web/frontend/src/components/models/provider-label.ts
+index 82600a9..06ff65e 100644
+--- a/web/frontend/src/components/models/provider-label.ts
++++ b/web/frontend/src/components/models/provider-label.ts
+@@ -3,21 +3,21 @@ const PROVIDER_LABELS: Record<string, string> = {
+   anthropic: "Anthropic",
+   gemini: "Google Gemini",
+   deepseek: "DeepSeek",
+-  qwen: "Qwen (阿里云)",
+-  moonshot: "Moonshot (月之暗面)",
++  qwen: "Qwen (Alibaba Cloud)",
++  moonshot: "Moonshot AI",
+   groq: "Groq",
+   openrouter: "OpenRouter",
+   nvidia: "NVIDIA",
+   cerebras: "Cerebras",
+-  volcengine: "Volcengine (火山引擎)",
+-  shengsuanyun: "ShengsuanYun (神算云)",
++  volcengine: "Volcengine (ByteDance)",
++  shengsuanyun: "ShengsuanYun",
+   antigravity: "Google Code Assist",
+   "github-copilot": "GitHub Copilot",
+   ollama: "Ollama (local)",
+   mistral: "Mistral AI",
+   avian: "Avian",
+   vllm: "VLLM (local)",
+-  zhipu: "Zhipu AI (智谱)",
++  zhipu: "Zhipu AI",
+   mimo: "Xiaomi MiMo",
+ }
+
+diff --git a/web/frontend/src/i18n/index.ts b/web/frontend/src/i18n/index.ts
+index bdc1fe9..33e7e76 100644
+--- a/web/frontend/src/i18n/index.ts
++++ b/web/frontend/src/i18n/index.ts
+@@ -4,7 +4,6 @@ import "dayjs/locale/zh-cn"
+ import localizedFormat from "dayjs/plugin/localizedFormat"
+ import relativeTime from "dayjs/plugin/relativeTime"
+ import i18n from "i18next"
+-import LanguageDetector from "i18next-browser-languagedetector"
+ import { initReactI18next } from "react-i18next"
+
+ import en from "./locales/en.json"
+@@ -14,14 +13,9 @@ dayjs.extend(relativeTime)
+ dayjs.extend(localizedFormat)
+
+ i18n
+-  // detect user language
+-  // learn more: https://github.com/i18next/i18next-browser-languageDetector
+-  .use(LanguageDetector)
+-  // pass the i18n instance to react-i18next.
+   .use(initReactI18next)
+-  // init i18next
+-  // for all options read: https://www.i18next.com/overview/configuration-options
+   .init({
++    lng: "en",
+     resources: {
+       en: {
+         translation: en,
+@@ -38,12 +32,6 @@ i18n
+     },
+   })
+
+-i18n.on("languageChanged", (lng) => {
+-  if (lng.startsWith("zh")) {
+-    dayjs.locale("zh-cn")
+-  } else {
+-    dayjs.locale("en")
+-  }
+-})
++dayjs.locale("en")
+
+ export default i18n
