@@ -1,42 +1,466 @@
-diff --git a/web/backend/api/gateway.go b/web/backend/api/gateway.go
-index 4bde5ce..b0a25c5 100644
---- a/web/backend/api/gateway.go
-+++ b/web/backend/api/gateway.go
-@@ -381,7 +381,13 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
- 	// Locate the picoclaw executable
- 	execPath := utils.FindPicoclawBinary()
+diff --git a/pkg/agent/context.go b/pkg/agent/context.go
+index c292129..6c1891a 100644
+--- a/pkg/agent/context.go
++++ b/pkg/agent/context.go
+@@ -1,6 +1,7 @@
+ package agent
  
--	cmd = exec.Command(execPath, "gateway", "-E")
-+	args := []string{"gateway", "-E"}
-+	if strings.EqualFold(strings.TrimSpace(cfg.Gateway.LogLevel), "debug") {
-+		args = append(args, "-d", "--no-truncate")
-+		logger.InfoC("gateway", "HA wrapper enabled gateway debug mode (-d --no-truncate)")
+ import (
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"io/fs"
+@@ -44,6 +45,9 @@ type ContextBuilder struct {
+ 	// build time. This catches nested file creations/deletions/mtime changes
+ 	// that may not update the top-level skill root directory mtime.
+ 	skillFilesAtCache map[string]time.Time
++
++	injectedToolsMutex sync.Mutex
++	injectedToolsJSON  string
+ }
+ 
+ func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
+@@ -167,6 +171,30 @@ Each part separated by the marker will be sent as an independent message.`)
+ 	return strings.Join(parts, "\n\n---\n\n")
+ }
+ 
++func (cb *ContextBuilder) ExportInjectedTools(toolDefs []providers.ToolDefinition) error {
++	data, err := json.MarshalIndent(toolDefs, "", "  ")
++	if err != nil {
++		return err
 +	}
 +
-+	cmd = exec.Command(execPath, args...)
++	data = append(data, '\n')
++	rendered := string(data)
++
++	cb.injectedToolsMutex.Lock()
++	defer cb.injectedToolsMutex.Unlock()
++
++	if cb.injectedToolsJSON == rendered {
++		return nil
++	}
++
++	if err := os.WriteFile(filepath.Join(cb.workspace, "TOOLS.injected.json"), data, 0o644); err != nil {
++		return err
++	}
++
++	cb.injectedToolsJSON = rendered
++	return nil
++}
++
+ // BuildSystemPromptWithCache returns the cached system prompt if available
+ // and source files haven't changed, otherwise builds and caches it.
+ // Source file changes are detected via mtime checks (cheap stat calls).
+@@ -457,6 +485,10 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
+ 	if agentDefinition.User != nil {
+ 		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
+ 	}
++	filePath := filepath.Join(cb.workspace, "TOOLS.md")
++	if data, err := os.ReadFile(filePath); err == nil {
++		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "TOOLS.md", data)
++	}
+ 
+ 	if agentDefinition.Source != AgentDefinitionSourceAgent {
+ 		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
+diff --git a/pkg/agent/definition.go b/pkg/agent/definition.go
+index cf73d60..27a243a 100644
+--- a/pkg/agent/definition.go
++++ b/pkg/agent/definition.go
+@@ -121,6 +121,7 @@ func (definition AgentContextDefinition) trackedPaths(workspace string) []string
+ 	paths := []string{
+ 		filepath.Join(workspace, string(AgentDefinitionSourceAgent)),
+ 		filepath.Join(workspace, "SOUL.md"),
++		filepath.Join(workspace, "TOOLS.md"),
+ 		filepath.Join(workspace, "USER.md"),
+ 	}
+ 	if definition.Source != AgentDefinitionSourceAgent {
+diff --git a/pkg/agent/loop.go b/pkg/agent/loop.go
+index 808d12c..c0793f9 100644
+--- a/pkg/agent/loop.go
++++ b/pkg/agent/loop.go
+@@ -157,6 +157,10 @@ func NewAgentLoop(
+ 	// Register shared tools to all agents (now that al is created)
+ 	registerSharedTools(al, cfg, msgBus, registry, provider)
+ 
++	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
++		al.exportInjectedTools(defaultAgent, al.visibleProviderTools(defaultAgent))
++	}
++
+ 	return al
+ }
+ 
+@@ -1305,7 +1309,66 @@ func (al *AgentLoop) ProcessDirectWithChannel(
+ 		SessionKey: sessionKey,
+ 	}
+ 
+-	return al.processMessage(ctx, msg)
++	response, err := al.processMessage(ctx, msg)
++	finalResponse := response
++	if err != nil {
++		finalResponse = fmt.Sprintf("Error processing message: %v", err)
++	}
++
++	target, targetErr := al.buildContinuationTarget(msg)
++	if targetErr != nil {
++		logger.WarnCF("agent", "Failed to build direct continuation target",
++			map[string]any{
++				"channel": channel,
++				"chat_id": chatID,
++				"error":   targetErr.Error(),
++			})
++		return finalResponse, err
++	}
++
++	if target != nil {
++		for al.pendingSteeringCountForScope(target.SessionKey) > 0 {
++			logger.InfoCF("agent", "Continuing queued steering after direct turn",
++				map[string]any{
++					"channel":     target.Channel,
++					"chat_id":     target.ChatID,
++					"session_key": target.SessionKey,
++					"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
++				})
++
++			continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID)
++			if continueErr != nil {
++				logger.WarnCF("agent", "Failed to continue queued steering after direct turn",
++					map[string]any{
++						"channel": target.Channel,
++						"chat_id": target.ChatID,
++						"error":   continueErr.Error(),
++					})
++				if err == nil {
++					err = continueErr
++					finalResponse = fmt.Sprintf("Error processing message: %v", continueErr)
++				}
++				break
++			}
++			if continued == "" {
++				break
++			}
++
++			finalResponse = continued
++		}
++	}
++
++	if channel != "cli" && finalResponse != "" {
++		publishChannel := channel
++		publishChatID := chatID
++		if target != nil {
++			publishChannel = target.Channel
++			publishChatID = target.ChatID
++		}
++		al.PublishResponseIfNeeded(ctx, publishChannel, publishChatID, finalResponse)
++	}
++
++	return finalResponse, err
+ }
+ 
+ // ProcessHeartbeat processes a heartbeat request without session history.
+@@ -1885,29 +1948,11 @@ turnLoop:
+ 			})
+ 
+ 		gracefulTerminal, _ := ts.gracefulInterruptRequested()
+-		providerToolDefs := ts.agent.Tools.ToProviderDefs()
+-
+-		// Native web search support (from HEAD)
+-		_, hasWebSearch := ts.agent.Tools.Get("web_search")
+-		useNativeSearch := al.cfg.Tools.Web.PreferNative &&
+-			hasWebSearch &&
+-			func() bool {
+-				// Check if provider supports native search
+-				if ns, ok := ts.agent.Provider.(interface{ SupportsNativeSearch() bool }); ok {
+-					return ns.SupportsNativeSearch()
+-				}
+-				return false
+-			}()
++		providerToolDefs := al.visibleProviderTools(ts.agent)
++		useNativeSearch := al.cfg.Tools.Web.PreferNative && isNativeSearchProvider(ts.agent.Provider)
+ 
+-		if useNativeSearch {
+-			// Filter out client-side web_search tool
+-			filtered := make([]providers.ToolDefinition, 0, len(providerToolDefs))
+-			for _, td := range providerToolDefs {
+-				if td.Function.Name != "web_search" {
+-					filtered = append(filtered, td)
+-				}
+-			}
+-			providerToolDefs = filtered
++		if !gracefulTerminal {
++			al.exportInjectedTools(ts.agent, providerToolDefs)
+ 		}
+ 
+ 		// Resolve media:// refs produced by tool results (e.g. load_image).
+@@ -2430,6 +2475,7 @@ turnLoop:
+ 			// Send tool feedback to chat channel if enabled (from HEAD)
+ 			if al.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
+ 				ts.channel != "" &&
++				!strings.EqualFold(ts.channel, "telegram") &&
+ 				!ts.opts.SuppressToolFeedback {
+ 				feedbackPreview := utils.Truncate(
+ 					string(argsJSON),
+@@ -3411,6 +3457,32 @@ func filterClientWebSearch(tools []providers.ToolDefinition) []providers.ToolDef
+ 	return result
+ }
+ 
++func (al *AgentLoop) visibleProviderTools(agent *AgentInstance) []providers.ToolDefinition {
++	if agent == nil {
++		return nil
++	}
++
++	toolDefs := agent.Tools.ToProviderDefs()
++	if al.cfg.Tools.Web.PreferNative && isNativeSearchProvider(agent.Provider) {
++		return filterClientWebSearch(toolDefs)
++	}
++	return toolDefs
++}
++
++func (al *AgentLoop) exportInjectedTools(agent *AgentInstance, toolDefs []providers.ToolDefinition) {
++	if agent == nil || agent.ContextBuilder == nil {
++		return
++	}
++
++	if err := agent.ContextBuilder.ExportInjectedTools(toolDefs); err != nil {
++		logger.WarnCF("agent", "Failed to export injected tools JSON",
++			map[string]any{
++				"agent_id": agent.ID,
++				"error":    err.Error(),
++			})
++	}
++}
++
+ // Helper to extract provider from registry for cleanup
+ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
+ 	if registry == nil {
+diff --git a/pkg/agent/loop_test.go b/pkg/agent/loop_test.go
+index 9513d8a..e43d8ca 100644
+--- a/pkg/agent/loop_test.go
++++ b/pkg/agent/loop_test.go
+@@ -2064,6 +2064,80 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
+ 	}
+ }
+ 
++func TestNewAgentLoop_ExportsInjectedToolsJSON(t *testing.T) {
++	cfg := config.DefaultConfig()
++	cfg.Agents.Defaults.Workspace = t.TempDir()
++
++	msgBus := bus.NewMessageBus()
++	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "ok"})
++
++	defaultAgent := al.registry.GetDefaultAgent()
++	if defaultAgent == nil {
++		t.Fatal("No default agent found")
++	}
++
++	toolsPath := filepath.Join(defaultAgent.Workspace, "TOOLS.injected.json")
++	data, err := os.ReadFile(toolsPath)
++	if err != nil {
++		t.Fatalf("ReadFile(%q) error = %v", toolsPath, err)
++	}
++
++	if !strings.Contains(string(data), "\"read_file\"") {
++		t.Fatalf("TOOLS.injected.json missing read_file definition: %s", string(data))
++	}
++	if !strings.Contains(string(data), "\"write_file\"") {
++		t.Fatalf("TOOLS.injected.json missing write_file definition: %s", string(data))
++	}
++}
++
++func TestProcessDirectWithChannel_PublishesOutboundForRemoteChannel(t *testing.T) {
++	tmpDir := t.TempDir()
++
++	cfg := &config.Config{
++		Agents: config.AgentsConfig{
++			Defaults: config.AgentDefaults{
++				Workspace:         tmpDir,
++				ModelName:         "test-model",
++				MaxTokens:         4096,
++				MaxToolIterations: 3,
++			},
++		},
++	}
++
++	msgBus := bus.NewMessageBus()
++	provider := &simpleMockProvider{response: "cron answer"}
++	al := NewAgentLoop(cfg, msgBus, provider)
++
++	response, err := al.ProcessDirectWithChannel(
++		context.Background(),
++		"hello",
++		"cron-session",
++		"telegram",
++		"chat-1",
++	)
++	if err != nil {
++		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
++	}
++	if response != "cron answer" {
++		t.Fatalf("response = %q, want %q", response, "cron answer")
++	}
++
++	select {
++	case outbound := <-msgBus.OutboundChan():
++		if outbound.Channel != "telegram" {
++			t.Fatalf("outbound channel = %q, want %q", outbound.Channel, "telegram")
++		}
++		if outbound.ChatID != "chat-1" {
++			t.Fatalf("outbound chatID = %q, want %q", outbound.ChatID, "chat-1")
++		}
++		if outbound.Content != "cron answer" {
++			t.Fatalf("outbound content = %q, want %q", outbound.Content, "cron answer")
++		}
++	case <-time.After(2 * time.Second):
++		t.Fatal("expected direct processing to publish an outbound message")
++	}
++}
++
+ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
+ 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+ 	if err != nil {
+@@ -2514,7 +2588,7 @@ func TestProcessHeartbeat_DoesNotPublishToolFeedback(t *testing.T) {
+ 	}
+ }
+ 
+-func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
++func TestProcessMessage_SuppressesTelegramToolFeedbackWhenEnabled(t *testing.T) {
+ 	tmpDir := t.TempDir()
+ 	heartbeatFile := filepath.Join(tmpDir, "tool-feedback.txt")
+ 	if err := os.WriteFile(heartbeatFile, []byte("tool feedback task"), 0o644); err != nil {
+@@ -2560,8 +2634,59 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
+ 
+ 	select {
+ 	case outbound := <-msgBus.OutboundChan():
+-		if outbound.Channel != "telegram" {
+-			t.Fatalf("tool feedback channel = %q, want %q", outbound.Channel, "telegram")
++		t.Fatalf("expected telegram tool feedback to be suppressed, got %+v", outbound)
++	case <-time.After(200 * time.Millisecond):
++	}
++}
++
++func TestProcessMessage_PublishesToolFeedbackForNonTelegramChannel(t *testing.T) {
++	tmpDir := t.TempDir()
++	heartbeatFile := filepath.Join(tmpDir, "tool-feedback.txt")
++	if err := os.WriteFile(heartbeatFile, []byte("tool feedback task"), 0o644); err != nil {
++		t.Fatalf("WriteFile() error = %v", err)
++	}
++
++	cfg := &config.Config{
++		Agents: config.AgentsConfig{
++			Defaults: config.AgentDefaults{
++				Workspace:         tmpDir,
++				ModelName:         "test-model",
++				MaxTokens:         4096,
++				MaxToolIterations: 10,
++				ToolFeedback: config.ToolFeedbackConfig{
++					Enabled:       true,
++					MaxArgsLength: 300,
++				},
++			},
++		},
++		Tools: config.ToolsConfig{
++			ReadFile: config.ReadFileToolConfig{
++				Enabled: true,
++			},
++		},
++	}
++
++	msgBus := bus.NewMessageBus()
++	provider := &toolFeedbackProvider{filePath: heartbeatFile}
++	al := NewAgentLoop(cfg, msgBus, provider)
++
++	response, err := al.processMessage(context.Background(), bus.InboundMessage{
++		Channel:  "slack",
++		SenderID: "user-1",
++		ChatID:   "chat-1",
++		Content:  "check tool feedback",
++	})
++	if err != nil {
++		t.Fatalf("processMessage() error = %v", err)
++	}
++	if response != "HEARTBEAT_OK" {
++		t.Fatalf("processMessage() response = %q, want %q", response, "HEARTBEAT_OK")
++	}
++
++	select {
++	case outbound := <-msgBus.OutboundChan():
++		if outbound.Channel != "slack" {
++			t.Fatalf("tool feedback channel = %q, want %q", outbound.Channel, "slack")
+ 		}
+ 		if outbound.ChatID != "chat-1" {
+ 			t.Fatalf("tool feedback chatID = %q, want %q", outbound.ChatID, "chat-1")
+@@ -2570,7 +2695,7 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
+ 			t.Fatalf("tool feedback content = %q, want read_file preview", outbound.Content)
+ 		}
+ 	case <-time.After(2 * time.Second):
+-		t.Fatal("expected outbound tool feedback for regular messages")
++		t.Fatal("expected outbound tool feedback for non-telegram messages")
+ 	}
+ }
+ 
+diff --git a/pkg/config/security.go b/pkg/config/security.go
+index 2414cd7..5d6d3a5 100644
+--- a/pkg/config/security.go
++++ b/pkg/config/security.go
+@@ -20,11 +20,15 @@ import (
+ )
+ 
+ const (
+-	SecurityConfigFile = ".security.yml"
++	SecurityConfigFile   = ".security.yml"
++	SecurityConfigDirEnv = "PICOCLAW_SECURITY_DIR"
+ )
+ 
+ // securityPath returns the path to security.yml relative to the config file
+ func securityPath(configPath string) string {
++	if overrideDir := strings.TrimSpace(os.Getenv(SecurityConfigDirEnv)); overrideDir != "" {
++		return filepath.Join(overrideDir, SecurityConfigFile)
++	}
+ 	configDir := filepath.Dir(configPath)
+ 	return filepath.Join(configDir, SecurityConfigFile)
+ }
+diff --git a/pkg/gateway/gateway.go b/pkg/gateway/gateway.go
+index 509b5d3..4e04215 100644
+--- a/pkg/gateway/gateway.go
++++ b/pkg/gateway/gateway.go
+@@ -735,6 +735,9 @@ func setupCronTool(
+ 	if cronTool != nil {
+ 		cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
+ 			result := cronTool.ExecuteJob(context.Background(), job)
++			if strings.HasPrefix(result, "Error:") {
++				return result, fmt.Errorf(strings.TrimSpace(strings.TrimPrefix(result, "Error:")))
++			}
+ 			return result, nil
+ 		})
+ 	}
+diff --git a/web/backend/api/gateway.go b/web/backend/api/gateway.go
+index b54e55b..01c08c4 100644
+--- a/web/backend/api/gateway.go
++++ b/web/backend/api/gateway.go
+@@ -69,10 +69,10 @@ func ensurePicoTokenCachedLocked(configPath string) {
+ 	refreshPicoTokensLocked(configPath)
+ }
+ 
+-func (h *Handler) gatewayCommandArgs() []string {
++func (h *Handler) gatewayCommandArgs(cfg *config.Config) []string {
+ 	args := []string{"gateway", "-E"}
+-	if h.debug {
+-		args = append(args, "-d")
++	if h.debug || strings.EqualFold(strings.TrimSpace(cfg.Gateway.LogLevel), "debug") {
++		args = append(args, "-d", "--no-truncate")
+ 	}
+ 	return args
+ }
+@@ -539,7 +539,7 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
+ 	execPath := utils.FindPicoclawBinary()
+ 	logger.InfoC("gateway", fmt.Sprintf("Starting gateway process (%s)", execPath))
+ 
+-	cmd = exec.Command(execPath, h.gatewayCommandArgs()...)
++	cmd = exec.Command(execPath, h.gatewayCommandArgs(cfg)...)
  	cmd.Env = os.Environ()
  	// Forward the launcher's config path via the environment variable that
  	// GetConfigPath() already reads, so the gateway sub-process uses the same
-@@ -730,7 +736,6 @@ func (h *Handler) gatewayStatusData() map[string]any {
- 		gateway.mu.Unlock()
- 		logger.ErrorC("gateway", fmt.Sprintf("Gateway health check failed: %v", err))
- 	} else {
--		logger.InfoC("gateway", fmt.Sprintf("Gateway health status: %d", statusCode))
- 		if statusCode != http.StatusOK {
- 			gateway.mu.Lock()
- 			setGatewayRuntimeStatusLocked("error")
-@@ -865,6 +870,8 @@ func scanPipe(r io.Reader, buf *LogBuffer) {
- 	scanner := bufio.NewScanner(r)
- 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
- 	for scanner.Scan() {
--		buf.Append(scanner.Text())
-+		line := scanner.Text()
-+		buf.Append(line)
-+		fmt.Println(line)
- 	}
- }
 diff --git a/web/backend/api/gateway_host.go b/web/backend/api/gateway_host.go
-index 592571a..d378914 100644
+index f8e8ead..2d2dffe 100644
 --- a/web/backend/api/gateway_host.go
 +++ b/web/backend/api/gateway_host.go
 @@ -75,6 +75,17 @@ func requestHostName(r *http.Request) string {
@@ -57,25 +481,22 @@ index 592571a..d378914 100644
  func requestWSScheme(r *http.Request) string {
  	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
  		proto := strings.ToLower(strings.TrimSpace(strings.Split(forwarded, ",")[0]))
-@@ -94,15 +105,10 @@ func requestWSScheme(r *http.Request) string {
+@@ -208,13 +219,13 @@ func (h *Handler) picoWebUIAddr(r *http.Request) string {
  }
  
- func (h *Handler) buildWsURL(r *http.Request, cfg *config.Config) string {
--	host := h.effectiveGatewayBindHost(cfg)
--	if host == "" || host == "0.0.0.0" {
-+	_ = cfg
-+	host := strings.TrimSpace(r.Host)
-+	if host == "" {
- 		host = requestHostName(r)
- 	}
--	// Use web server port instead of gateway port to avoid exposing extra ports
--	// The WebSocket connection will be proxied by the backend to the gateway
--	wsPort := h.serverPort
--	if wsPort == 0 {
--		wsPort = 18800 // default web server port
--	}
--	return requestWSScheme(r) + "://" + net.JoinHostPort(host, strconv.Itoa(wsPort)) + "/pico/ws"
-+	return requestWSScheme(r) + "://" + host + ingressBasePath(r) + "/pico/ws"
+ func (h *Handler) buildWsURL(r *http.Request) string {
+-	return requestWSScheme(r) + "://" + h.picoWebUIAddr(r) + "/pico/ws"
++	return requestWSScheme(r) + "://" + h.picoWebUIAddr(r) + ingressBasePath(r) + "/pico/ws"
+ }
+ 
+ func (h *Handler) buildPicoEventsURL(r *http.Request) string {
+-	return requestHTTPScheme(r) + "://" + h.picoWebUIAddr(r) + "/pico/events"
++	return requestHTTPScheme(r) + "://" + h.picoWebUIAddr(r) + ingressBasePath(r) + "/pico/events"
+ }
+ 
+ func (h *Handler) buildPicoSendURL(r *http.Request) string {
+-	return requestHTTPScheme(r) + "://" + h.picoWebUIAddr(r) + "/pico/send"
++	return requestHTTPScheme(r) + "://" + h.picoWebUIAddr(r) + ingressBasePath(r) + "/pico/send"
  }
 diff --git a/web/backend/embed.go b/web/backend/embed.go
 index cf0c76b..ddf46a0 100644
@@ -165,275 +586,106 @@ index cf0c76b..ddf46a0 100644
  		}),
  	)
  }
-diff --git a/web/frontend/src/api/channels.ts b/web/frontend/src/api/channels.ts
-index 85550ca..981ed47 100644
---- a/web/frontend/src/api/channels.ts
-+++ b/web/frontend/src/api/channels.ts
+diff --git a/web/backend/middleware/launcher_dashboard_auth.go b/web/backend/middleware/launcher_dashboard_auth.go
+index 7e92fca..295b083 100644
+--- a/web/backend/middleware/launcher_dashboard_auth.go
++++ b/web/backend/middleware/launcher_dashboard_auth.go
+@@ -86,6 +86,10 @@ func ClearLauncherDashboardSessionCookie(w http.ResponseWriter, r *http.Request,
+ // before calling next. Public paths are login page and /api/auth/* handlers.
+ func LauncherDashboardAuth(cfg LauncherDashboardAuthConfig, next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if strings.TrimSpace(r.Header.Get("X-Ingress-Path")) != "" {
++			next.ServeHTTP(w, r)
++			return
++		}
+ 		p := canonicalAuthPath(r.URL.Path)
+ 		if handled := tryLauncherQueryTokenLogin(w, r, p, cfg); handled {
+ 			return
+diff --git a/web/frontend/src/api/http.ts b/web/frontend/src/api/http.ts
+index 0eb872f..4926b5b 100644
+--- a/web/frontend/src/api/http.ts
++++ b/web/frontend/src/api/http.ts
 @@ -1,4 +1,5 @@
- // API client for channels navigation and channel-specific config flows.
+ import { isLauncherLoginPathname } from "@/lib/launcher-login-path"
 +import { withBasePath } from "@/lib/runtime"
  
- export type ChannelConfig = Record<string, unknown>
- export type AppConfig = Record<string, unknown>
-@@ -19,10 +20,8 @@ interface ConfigActionResponse {
-   errors?: string[]
- }
- 
--const BASE_URL = ""
--
- async function request<T>(path: string, options?: RequestInit): Promise<T> {
--  const res = await fetch(`${BASE_URL}${path}`, options)
-+  const res = await fetch(withBasePath(path), options)
-   if (!res.ok) {
-     let message = `API error: ${res.status} ${res.statusText}`
-     try {
-diff --git a/web/frontend/src/api/gateway.ts b/web/frontend/src/api/gateway.ts
-index 9e02a02..f500fe1 100644
---- a/web/frontend/src/api/gateway.ts
-+++ b/web/frontend/src/api/gateway.ts
-@@ -1,4 +1,5 @@
- // API client for gateway process management.
-+import { withBasePath } from "@/lib/runtime"
- 
- interface GatewayStatusResponse {
-   gateway_status: "running" | "starting" | "restarting" | "stopped" | "error"
-@@ -24,10 +25,8 @@ interface GatewayActionResponse {
-   log_run_id?: number
- }
- 
--const BASE_URL = ""
--
- async function request<T>(path: string, options?: RequestInit): Promise<T> {
--  const res = await fetch(`${BASE_URL}${path}`, options)
-+  const res = await fetch(withBasePath(path), options)
-   if (!res.ok) {
-     throw new Error(`API error: ${res.status} ${res.statusText}`)
-   }
-diff --git a/web/frontend/src/api/models.ts b/web/frontend/src/api/models.ts
-index aa66a73..655f01b 100644
---- a/web/frontend/src/api/models.ts
-+++ b/web/frontend/src/api/models.ts
-@@ -1,4 +1,5 @@
- import { refreshGatewayState } from "@/store/gateway"
-+import { withBasePath } from "@/lib/runtime"
- 
- // API client for model list management.
- 
-@@ -36,10 +37,8 @@ interface ModelActionResponse {
-   default_model?: string
- }
- 
--const BASE_URL = ""
--
- async function request<T>(path: string, options?: RequestInit): Promise<T> {
--  const res = await fetch(`${BASE_URL}${path}`, options)
-+  const res = await fetch(withBasePath(path), options)
-   if (!res.ok) {
-     throw new Error(`API error: ${res.status} ${res.statusText}`)
-   }
-diff --git a/web/frontend/src/api/oauth.ts b/web/frontend/src/api/oauth.ts
-index a1ed1af..9f7efb0 100644
---- a/web/frontend/src/api/oauth.ts
-+++ b/web/frontend/src/api/oauth.ts
-@@ -1,3 +1,5 @@
-+import { withBasePath } from "@/lib/runtime"
+ function isLauncherLoginPath(): boolean {
+   if (typeof globalThis.location === "undefined") {
+@@ -24,7 +25,14 @@ export async function launcherFetch(
+   input: RequestInfo | URL,
+   init?: RequestInit,
+ ): Promise<Response> {
+-  const res = await fetch(input, {
++  const resolvedInput =
++    typeof input === "string"
++      ? withBasePath(input)
++      : input instanceof URL
++        ? new URL(withBasePath(input.pathname + input.search + input.hash), input.origin)
++        : input
 +
- export type OAuthProvider = "openai" | "anthropic" | "google-antigravity"
- export type OAuthMethod = "browser" | "device_code" | "token"
- 
-@@ -48,10 +50,8 @@ interface OAuthProvidersResponse {
-   providers: OAuthProviderStatus[]
- }
- 
--const BASE_URL = ""
--
- async function request<T>(path: string, options?: RequestInit): Promise<T> {
--  const res = await fetch(`${BASE_URL}${path}`, options)
-+  const res = await fetch(withBasePath(path), options)
-   if (!res.ok) {
-     const message = await res.text()
-     throw new Error(message || `API error: ${res.status} ${res.statusText}`)
-diff --git a/web/frontend/src/api/pico.ts b/web/frontend/src/api/pico.ts
-index 9a1a553..7fb77eb 100644
---- a/web/frontend/src/api/pico.ts
-+++ b/web/frontend/src/api/pico.ts
-@@ -1,4 +1,5 @@
- // API client for Pico Channel configuration.
-+import { withBasePath } from "@/lib/runtime"
- 
- interface PicoTokenResponse {
-   token: string
-@@ -13,10 +14,8 @@ interface PicoSetupResponse {
-   changed: boolean
- }
- 
--const BASE_URL = ""
--
- async function request<T>(path: string, options?: RequestInit): Promise<T> {
--  const res = await fetch(`${BASE_URL}${path}`, options)
-+  const res = await fetch(withBasePath(path), options)
-   if (!res.ok) {
-     throw new Error(`API error: ${res.status} ${res.statusText}`)
-   }
-diff --git a/web/frontend/src/api/sessions.ts b/web/frontend/src/api/sessions.ts
-index 10b0d28..fbebe4d 100644
---- a/web/frontend/src/api/sessions.ts
-+++ b/web/frontend/src/api/sessions.ts
-@@ -1,4 +1,5 @@
- // Sessions API — list and retrieve chat session history
-+import { withBasePath } from "@/lib/runtime"
- 
- export interface SessionSummary {
-   id: string
-@@ -26,7 +27,7 @@ export async function getSessions(
-     limit: limit.toString(),
++  const res = await fetch(resolvedInput, {
+     credentials: "same-origin",
+     ...init,
    })
- 
--  const res = await fetch(`/api/sessions?${params.toString()}`)
-+  const res = await fetch(withBasePath(`/api/sessions?${params.toString()}`))
-   if (!res.ok) {
-     throw new Error(`Failed to fetch sessions: ${res.status}`)
+@@ -35,7 +43,7 @@ export async function launcherFetch(
+       typeof globalThis.location !== "undefined" &&
+       !isLauncherLoginPath()
+     ) {
+-      globalThis.location.assign("/launcher-login")
++      globalThis.location.assign(withBasePath("/launcher-login"))
+     }
    }
-@@ -34,7 +35,9 @@ export async function getSessions(
- }
- 
- export async function getSessionHistory(id: string): Promise<SessionDetail> {
--  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`)
-+  const res = await fetch(
-+    withBasePath(`/api/sessions/${encodeURIComponent(id)}`),
-+  )
-   if (!res.ok) {
-     throw new Error(`Failed to fetch session ${id}: ${res.status}`)
-   }
-@@ -42,9 +45,12 @@ export async function getSessionHistory(id: string): Promise<SessionDetail> {
- }
- 
- export async function deleteSession(id: string): Promise<void> {
--  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
--    method: "DELETE",
--  })
-+  const res = await fetch(
-+    withBasePath(`/api/sessions/${encodeURIComponent(id)}`),
-+    {
-+      method: "DELETE",
-+    },
-+  )
-   if (!res.ok) {
-     throw new Error(`Failed to delete session ${id}: ${res.status}`)
-   }
-diff --git a/web/frontend/src/api/skills.ts b/web/frontend/src/api/skills.ts
-index 307cbd7..3abd7e5 100644
---- a/web/frontend/src/api/skills.ts
-+++ b/web/frontend/src/api/skills.ts
+   return res
+diff --git a/web/frontend/src/api/launcher-auth.ts b/web/frontend/src/api/launcher-auth.ts
+index 4ca5199..97059cf 100644
+--- a/web/frontend/src/api/launcher-auth.ts
++++ b/web/frontend/src/api/launcher-auth.ts
 @@ -1,3 +1,5 @@
 +import { withBasePath } from "@/lib/runtime"
 +
- export interface SkillSupportItem {
-   name: string
-   path: string
-@@ -22,7 +24,7 @@ interface SkillActionResponse {
- }
- 
- async function request<T>(path: string, options?: RequestInit): Promise<T> {
--  const res = await fetch(path, options)
-+  const res = await fetch(withBasePath(path), options)
-   if (!res.ok) {
-     throw new Error(await extractErrorMessage(res))
-   }
-@@ -41,7 +43,7 @@ export async function importSkill(file: File): Promise<SkillActionResponse> {
-   const formData = new FormData()
-   formData.set("file", file)
- 
--  const res = await fetch("/api/skills/import", {
-+  const res = await fetch(withBasePath("/api/skills/import"), {
+ /**
+  * Dashboard launcher token login. Uses plain fetch (not launcherFetch) to avoid
+  * redirect loops on 401 while on the login page.
+@@ -5,7 +7,7 @@
+ export async function postLauncherDashboardLogin(
+   token: string,
+ ): Promise<boolean> {
+-  const res = await fetch("/api/auth/login", {
++  const res = await fetch(withBasePath("/api/auth/login"), {
      method: "POST",
-     body: formData,
+     headers: { "Content-Type": "application/json" },
+     credentials: "same-origin",
+@@ -28,7 +30,7 @@ export type LauncherAuthStatus = {
+ }
+ 
+ export async function getLauncherAuthStatus(): Promise<LauncherAuthStatus> {
+-  const res = await fetch("/api/auth/status", {
++  const res = await fetch(withBasePath("/api/auth/status"), {
+     method: "GET",
+     credentials: "same-origin",
    })
-diff --git a/web/frontend/src/api/system.ts b/web/frontend/src/api/system.ts
-index 543c869..7ad8646 100644
---- a/web/frontend/src/api/system.ts
-+++ b/web/frontend/src/api/system.ts
-@@ -1,3 +1,5 @@
-+import { withBasePath } from "@/lib/runtime"
-+
- export interface AutoStartStatus {
-   enabled: boolean
-   supported: boolean
-@@ -12,7 +14,7 @@ export interface LauncherConfig {
+@@ -39,7 +41,7 @@ export async function getLauncherAuthStatus(): Promise<LauncherAuthStatus> {
  }
  
- async function request<T>(path: string, options?: RequestInit): Promise<T> {
--  const res = await fetch(path, options)
-+  const res = await fetch(withBasePath(path), options)
-   if (!res.ok) {
-     let message = `API error: ${res.status} ${res.statusText}`
-     try {
-diff --git a/web/frontend/src/api/tools.ts b/web/frontend/src/api/tools.ts
-index 9f09efb..922581a 100644
---- a/web/frontend/src/api/tools.ts
-+++ b/web/frontend/src/api/tools.ts
-@@ -1,3 +1,5 @@
-+import { withBasePath } from "@/lib/runtime"
-+
- export interface ToolSupportItem {
-   name: string
-   description: string
-@@ -16,7 +18,7 @@ interface ToolActionResponse {
- }
- 
- async function request<T>(path: string, options?: RequestInit): Promise<T> {
--  const res = await fetch(path, options)
-+  const res = await fetch(withBasePath(path), options)
-   if (!res.ok) {
-     let message = `API error: ${res.status} ${res.statusText}`
-     try {
-diff --git a/web/frontend/src/components/app-header.tsx b/web/frontend/src/components/app-header.tsx
-index 4f06880..075b6b3 100644
---- a/web/frontend/src/components/app-header.tsx
-+++ b/web/frontend/src/components/app-header.tsx
-@@ -227,7 +227,7 @@ export function AppHeader() {
-               English
-             </DropdownMenuItem>
-             <DropdownMenuItem onClick={() => i18n.changeLanguage("zh")}>
--              简体中文
-+              Chinese (Simplified)
-             </DropdownMenuItem>
-           </DropdownMenuContent>
-         </DropdownMenu>
-diff --git a/web/frontend/src/components/config/config-page.tsx b/web/frontend/src/components/config/config-page.tsx
-index 24a719d..d103000 100644
---- a/web/frontend/src/components/config/config-page.tsx
-+++ b/web/frontend/src/components/config/config-page.tsx
-@@ -5,6 +5,7 @@ import { useEffect, useState } from "react"
- import { useTranslation } from "react-i18next"
- import { toast } from "sonner"
- 
-+import { withBasePath } from "@/lib/runtime"
- import { patchAppConfig } from "@/api/channels"
- import {
-   getAutoStartStatus,
-@@ -49,7 +50,7 @@ export function ConfigPage() {
-   const { data, isLoading, error } = useQuery({
-     queryKey: ["config"],
-     queryFn: async () => {
--      const res = await fetch("/api/config")
-+      const res = await fetch(withBasePath("/api/config"))
-       if (!res.ok) {
-         throw new Error("Failed to load config")
-       }
+ export async function postLauncherDashboardLogout(): Promise<boolean> {
+-  const res = await fetch("/api/auth/logout", {
++  const res = await fetch(withBasePath("/api/auth/logout"), {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },
+     credentials: "same-origin",
 diff --git a/web/frontend/src/components/config/config-sections.tsx b/web/frontend/src/components/config/config-sections.tsx
-index 1f7426d..c724ccc 100644
+index 21f89d7..2b9c23c 100644
 --- a/web/frontend/src/components/config/config-sections.tsx
 +++ b/web/frontend/src/components/config/config-sections.tsx
-@@ -2,6 +2,7 @@ import { useState } from "react"
- import type { ReactNode } from "react"
- import { useTranslation } from "react-i18next"
- 
-+import { withBasePath } from "@/lib/runtime"
- import {
-   type CoreConfigForm,
+@@ -7,6 +7,7 @@ import {
    DM_SCOPE_OPTIONS,
-@@ -231,7 +232,7 @@ export function ExecSection({ form, onFieldChange }: ExecSectionProps) {
+   type LauncherForm,
+ } from "@/components/config/form-model"
++import { withBasePath } from "@/lib/runtime"
+ import { Field, SwitchCardField } from "@/components/shared-form"
+ import { Button } from "@/components/ui/button"
+ import {
+@@ -239,7 +240,7 @@ export function ExecSection({ form, onFieldChange }: ExecSectionProps) {
  
      setIsLoading(true)
      try {
@@ -442,138 +694,23 @@ index 1f7426d..c724ccc 100644
          method: "POST",
          headers: { "Content-Type": "application/json" },
          body: JSON.stringify({
-diff --git a/web/frontend/src/components/config/raw-config-page.tsx b/web/frontend/src/components/config/raw-config-page.tsx
-index e40cc73..26db0e0 100644
---- a/web/frontend/src/components/config/raw-config-page.tsx
-+++ b/web/frontend/src/components/config/raw-config-page.tsx
-@@ -5,6 +5,7 @@ import { useState } from "react"
- import { useTranslation } from "react-i18next"
- import { toast } from "sonner"
- 
-+import { withBasePath } from "@/lib/runtime"
- import { PageHeader } from "@/components/page-header"
- import {
-   AlertDialog,
-@@ -27,7 +28,7 @@ export function RawConfigPage() {
-   const { data: config, isLoading } = useQuery({
-     queryKey: ["config"],
-     queryFn: async () => {
--      const res = await fetch("/api/config")
-+      const res = await fetch(withBasePath("/api/config"))
-       if (!res.ok) {
-         throw new Error("Failed to fetch config")
-       }
-@@ -37,7 +38,7 @@ export function RawConfigPage() {
- 
-   const mutation = useMutation({
-     mutationFn: async (newConfig: string) => {
--      const res = await fetch("/api/config", {
-+      const res = await fetch(withBasePath("/api/config"), {
-         method: "PUT",
-         headers: { "Content-Type": "application/json" },
-         body: newConfig,
-diff --git a/web/frontend/src/components/models/provider-label.ts b/web/frontend/src/components/models/provider-label.ts
-index 923cd95..d191255 100644
---- a/web/frontend/src/components/models/provider-label.ts
-+++ b/web/frontend/src/components/models/provider-label.ts
-@@ -3,21 +3,21 @@ const PROVIDER_LABELS: Record<string, string> = {
-   anthropic: "Anthropic",
-   gemini: "Google Gemini",
-   deepseek: "DeepSeek",
--  qwen: "Qwen (阿里云)",
--  moonshot: "Moonshot (月之暗面)",
-+  qwen: "Qwen (Alibaba Cloud)",
-+  moonshot: "Moonshot AI",
-   groq: "Groq",
-   openrouter: "OpenRouter",
-   nvidia: "NVIDIA",
-   cerebras: "Cerebras",
--  volcengine: "Volcengine (火山引擎)",
--  shengsuanyun: "ShengsuanYun (神算云)",
-+  volcengine: "Volcengine",
-+  shengsuanyun: "ShengsuanYun",
-   antigravity: "Google Code Assist",
-   "github-copilot": "GitHub Copilot",
-   ollama: "Ollama (local)",
-   mistral: "Mistral AI",
-   avian: "Avian",
-   vllm: "VLLM (local)",
--  zhipu: "Zhipu AI (智谱)",
-+  zhipu: "Zhipu AI",
+diff --git a/web/frontend/src/lib/launcher-login-path.ts b/web/frontend/src/lib/launcher-login-path.ts
+index 52c35d2..ba1c829 100644
+--- a/web/frontend/src/lib/launcher-login-path.ts
++++ b/web/frontend/src/lib/launcher-login-path.ts
+@@ -1,3 +1,5 @@
++import { stripBasePath } from "@/lib/runtime"
++
+ /** Normalize URL pathname for comparisons (trailing slashes, empty). */
+ export function normalizePathname(p: string): string {
+   const t = p.replace(/\/+$/, "")
+@@ -5,5 +7,5 @@ export function normalizePathname(p: string): string {
  }
  
- export function getProviderKey(model: string): string {
-diff --git a/web/frontend/src/i18n/index.ts b/web/frontend/src/i18n/index.ts
-index bdc1fe9..4e8dea2 100644
---- a/web/frontend/src/i18n/index.ts
-+++ b/web/frontend/src/i18n/index.ts
-@@ -4,7 +4,6 @@ import "dayjs/locale/zh-cn"
- import localizedFormat from "dayjs/plugin/localizedFormat"
- import relativeTime from "dayjs/plugin/relativeTime"
- import i18n from "i18next"
--import LanguageDetector from "i18next-browser-languagedetector"
- import { initReactI18next } from "react-i18next"
- 
- import en from "./locales/en.json"
-@@ -14,9 +13,6 @@ dayjs.extend(relativeTime)
- dayjs.extend(localizedFormat)
- 
- i18n
--  // detect user language
--  // learn more: https://github.com/i18next/i18next-browser-languageDetector
--  .use(LanguageDetector)
-   // pass the i18n instance to react-i18next.
-   .use(initReactI18next)
-   // init i18next
-@@ -30,6 +26,7 @@ i18n
-         translation: zh,
-       },
-     },
-+    lng: "en",
-     fallbackLng: "en",
-     debug: false,
- 
-diff --git a/web/frontend/src/lib/runtime.ts b/web/frontend/src/lib/runtime.ts
-new file mode 100644
-index 0000000..4428a93
---- /dev/null
-+++ b/web/frontend/src/lib/runtime.ts
-@@ -0,0 +1,35 @@
-+declare global {
-+  interface Window {
-+    __PICOCLAW_BASE_PATH__?: string
-+  }
-+}
-+
-+function normalizeBasePath(value: string | undefined): string {
-+  const trimmed = value?.trim() ?? ""
-+  if (!trimmed || trimmed === "/") {
-+    return ""
-+  }
-+
-+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`
-+  return withLeadingSlash.endsWith("/")
-+    ? withLeadingSlash.slice(0, -1)
-+    : withLeadingSlash
-+}
-+
-+export function getBasePath(): string {
-+  return normalizeBasePath(window.__PICOCLAW_BASE_PATH__)
-+}
-+
-+export function getRouterBasePath(): string {
-+  return getBasePath() || "/"
-+}
-+
-+export function withBasePath(path: string): string {
-+  if (/^[a-z]+:\/\//i.test(path)) {
-+    return path
-+  }
-+
-+  const normalizedPath = path.startsWith("/") ? path : `/${path}`
-+  const basePath = getBasePath()
-+  return basePath ? `${basePath}${normalizedPath}` : normalizedPath
-+}
+ export function isLauncherLoginPathname(pathname: string): boolean {
+-  return normalizePathname(pathname) === "/launcher-login"
++  return normalizePathname(stripBasePath(pathname)) === "/launcher-login"
+ }
 diff --git a/web/frontend/src/main.tsx b/web/frontend/src/main.tsx
 index 81e72c2..26671ae 100644
 --- a/web/frontend/src/main.tsx
@@ -592,6 +729,27 @@ index 81e72c2..26671ae 100644
    routeTree,
    context: {
      queryClient,
+diff --git a/web/frontend/src/routes/launcher-login.tsx b/web/frontend/src/routes/launcher-login.tsx
+index f5cdd10..342402b 100644
+--- a/web/frontend/src/routes/launcher-login.tsx
++++ b/web/frontend/src/routes/launcher-login.tsx
+@@ -8,6 +8,7 @@ import {
+   getLauncherAuthStatus,
+   postLauncherDashboardLogin,
+ } from "@/api/launcher-auth"
++import { withBasePath } from "@/lib/runtime"
+ import { Button } from "@/components/ui/button"
+ import {
+   Card,
+@@ -59,7 +60,7 @@ function LauncherLoginPage() {
+       try {
+         const ok = await postLauncherDashboardLogin(tokenValue)
+         if (ok) {
+-          globalThis.location.assign("/")
++          globalThis.location.assign(withBasePath("/"))
+           return
+         }
+         setError(t("launcherLogin.errorInvalid"))
 diff --git a/web/frontend/vite.config.ts b/web/frontend/vite.config.ts
 index 0ef4e14..95be46b 100644
 --- a/web/frontend/vite.config.ts
@@ -604,215 +762,3 @@ index 0ef4e14..95be46b 100644
    plugins: [
      tanstackRouter({
        target: "react",
-diff --git a/pkg/agent/context.go b/pkg/agent/context.go
-index 12e3cdd..1bbfe3e 100644
---- a/pkg/agent/context.go
-+++ b/pkg/agent/context.go
-@@ -451,6 +451,10 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
- 	if agentDefinition.User != nil {
- 		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
- 	}
-+	filePath := filepath.Join(cb.workspace, "TOOLS.md")
-+	if data, err := os.ReadFile(filePath); err == nil {
-+		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "TOOLS.md", data)
-+	}
- 
- 	if agentDefinition.Source != AgentDefinitionSourceAgent {
- 		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
-diff --git a/pkg/agent/definition.go b/pkg/agent/definition.go
-index cf73d60..27a243a 100644
---- a/pkg/agent/definition.go
-+++ b/pkg/agent/definition.go
-@@ -121,6 +121,7 @@ func (definition AgentContextDefinition) trackedPaths(workspace string) []string
- 	paths := []string{
- 		filepath.Join(workspace, string(AgentDefinitionSourceAgent)),
- 		filepath.Join(workspace, "SOUL.md"),
-+		filepath.Join(workspace, "TOOLS.md"),
- 		filepath.Join(workspace, "USER.md"),
- 	}
- 	if definition.Source != AgentDefinitionSourceAgent {
-diff --git a/pkg/agent/loop.go b/pkg/agent/loop.go
-index c9efb31..8966c3d 100644
---- a/pkg/agent/loop.go
-+++ b/pkg/agent/loop.go
-@@ -1222,7 +1222,66 @@ func (al *AgentLoop) ProcessDirectWithChannel(
- 		SessionKey: sessionKey,
- 	}
- 
--	return al.processMessage(ctx, msg)
-+	response, err := al.processMessage(ctx, msg)
-+	finalResponse := response
-+	if err != nil {
-+		finalResponse = fmt.Sprintf("Error processing message: %v", err)
-+	}
-+
-+	target, targetErr := al.buildContinuationTarget(msg)
-+	if targetErr != nil {
-+		logger.WarnCF("agent", "Failed to build direct continuation target",
-+			map[string]any{
-+				"channel": channel,
-+				"chat_id": chatID,
-+				"error":   targetErr.Error(),
-+			})
-+		return finalResponse, err
-+	}
-+
-+	if target != nil {
-+		for al.pendingSteeringCountForScope(target.SessionKey) > 0 {
-+			logger.InfoCF("agent", "Continuing queued steering after direct turn",
-+				map[string]any{
-+					"channel":     target.Channel,
-+					"chat_id":     target.ChatID,
-+					"session_key": target.SessionKey,
-+					"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
-+				})
-+
-+			continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID)
-+			if continueErr != nil {
-+				logger.WarnCF("agent", "Failed to continue queued steering after direct turn",
-+					map[string]any{
-+						"channel": target.Channel,
-+						"chat_id": target.ChatID,
-+						"error":   continueErr.Error(),
-+					})
-+				if err == nil {
-+					err = continueErr
-+					finalResponse = fmt.Sprintf("Error processing message: %v", continueErr)
-+				}
-+				break
-+			}
-+			if continued == "" {
-+				break
-+			}
-+
-+			finalResponse = continued
-+		}
-+	}
-+
-+	if channel != "cli" && finalResponse != "" {
-+		publishChannel := channel
-+		publishChatID := chatID
-+		if target != nil {
-+			publishChannel = target.Channel
-+			publishChatID = target.ChatID
-+		}
-+		al.publishResponseIfNeeded(ctx, publishChannel, publishChatID, finalResponse)
-+	}
-+
-+	return finalResponse, err
- }
- 
- // ProcessHeartbeat processes a heartbeat request without session history.
-@@ -2309,6 +2368,7 @@ turnLoop:
- 			// Send tool feedback to chat channel if enabled (from HEAD)
- 			if al.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
- 				ts.channel != "" &&
-+				!strings.EqualFold(ts.channel, "telegram") &&
- 				!ts.opts.SuppressToolFeedback {
- 				feedbackPreview := utils.Truncate(
- 					string(argsJSON),
-diff --git a/pkg/agent/loop_test.go b/pkg/agent/loop_test.go
-index 341d15a..8dc17de 100644
---- a/pkg/agent/loop_test.go
-+++ b/pkg/agent/loop_test.go
-@@ -1943,6 +1943,54 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
- 	}
- }
- 
-+func TestProcessDirectWithChannel_PublishesOutboundForRemoteChannel(t *testing.T) {
-+	tmpDir := t.TempDir()
-+
-+	cfg := &config.Config{
-+		Agents: config.AgentsConfig{
-+			Defaults: config.AgentDefaults{
-+				Workspace:         tmpDir,
-+				ModelName:         "test-model",
-+				MaxTokens:         4096,
-+				MaxToolIterations: 3,
-+			},
-+		},
-+	}
-+
-+	msgBus := bus.NewMessageBus()
-+	provider := &simpleMockProvider{response: "cron answer"}
-+	al := NewAgentLoop(cfg, msgBus, provider)
-+
-+	response, err := al.ProcessDirectWithChannel(
-+		context.Background(),
-+		"hello",
-+		"cron-session",
-+		"telegram",
-+		"chat-1",
-+	)
-+	if err != nil {
-+		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
-+	}
-+	if response != "cron answer" {
-+		t.Fatalf("response = %q, want %q", response, "cron answer")
-+	}
-+
-+	select {
-+	case outbound := <-msgBus.OutboundChan():
-+		if outbound.Channel != "telegram" {
-+			t.Fatalf("outbound channel = %q, want %q", outbound.Channel, "telegram")
-+		}
-+		if outbound.ChatID != "chat-1" {
-+			t.Fatalf("outbound chatID = %q, want %q", outbound.ChatID, "chat-1")
-+		}
-+		if outbound.Content != "cron answer" {
-+			t.Fatalf("outbound content = %q, want %q", outbound.Content, "cron answer")
-+		}
-+	case <-time.After(2 * time.Second):
-+		t.Fatal("expected direct processing to publish an outbound message")
-+	}
-+}
-+
- func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
- 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
- 	if err != nil {
-diff --git a/pkg/config/security.go b/pkg/config/security.go
-index 47ad1a5..3f58ce0 100644
---- a/pkg/config/security.go
-+++ b/pkg/config/security.go
-@@ -22,7 +22,8 @@ import (
- )
- 
- const (
--	SecurityConfigFile = ".security.yml"
-+	SecurityConfigFile   = ".security.yml"
-+	SecurityConfigDirEnv = "PICOCLAW_SECURITY_DIR"
- )
- 
- func normalizeSecurityConfig(sec *SecurityConfig) *SecurityConfig {
-@@ -185,6 +186,9 @@ type ClawHubSecurity struct {
- 
- // securityPath returns the path to security.yml relative to the config file
- func securityPath(configPath string) string {
-+	if overrideDir := strings.TrimSpace(os.Getenv(SecurityConfigDirEnv)); overrideDir != "" {
-+		return filepath.Join(overrideDir, SecurityConfigFile)
-+	}
- 	configDir := filepath.Dir(configPath)
- 	return filepath.Join(configDir, SecurityConfigFile)
- }
-diff --git a/pkg/gateway/gateway.go b/pkg/gateway/gateway.go
-index 03d7dfe..8a4afd4 100644
---- a/pkg/gateway/gateway.go
-+++ b/pkg/gateway/gateway.go
-@@ -6,6 +6,7 @@ import (
- 	"os"
- 	"os/signal"
- 	"path/filepath"
-+	"strings"
- 	"sync"
- 	"sync/atomic"
- 	"syscall"
-@@ -646,6 +647,9 @@ func setupCronTool(
- 	if cronTool != nil {
- 		cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
- 			result := cronTool.ExecuteJob(context.Background(), job)
-+			if strings.HasPrefix(result, "Error:") {
-+				return result, fmt.Errorf(strings.TrimSpace(strings.TrimPrefix(result, "Error:")))
-+			}
- 			return result, nil
- 		})
- 	}

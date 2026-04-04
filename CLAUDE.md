@@ -49,8 +49,8 @@ Deux versions coexistent dans `picoclaw/build.yaml` :
 
 | Cle                        | Exemple      | Role                                    |
 |----------------------------|--------------|-----------------------------------------|
-| `PICOCLAW_VERSION`         | `v0.2.4`     | Tag upstream sipeed/picoclaw a cloner   |
-| `PICOCLAW_WRAPPER_VERSION` | `v0.2.4-ha.9`| Version du wrapper HA (affichee dans HA)|
+| `PICOCLAW_VERSION`         | `v0.2.5`     | Tag upstream sipeed/picoclaw a cloner   |
+| `PICOCLAW_WRAPPER_VERSION` | `v0.2.5-ha.1`| Version du wrapper HA (affichee dans HA)|
 
 Ces versions sont aussi dupliquees dans :
 - `picoclaw/config.yaml` → champ `version`
@@ -70,14 +70,14 @@ Sequence executee au lancement du container :
 4. **`bootstrap_workspace_templates`** — **Premier demarrage uniquement** (marker `.workspace-templates-bootstrapped`) : copie les fichiers templates depuis `/usr/local/share/picoclaw/workspace` (bundlés dans l'image) vers `/share/picoclaw/workspace`, sans ecraser les fichiers existants
 5. **`bootstrap_wrapper_workspace_files`** — Assure la presence de `TOOLS.md` et `HEARTBEAT.md` dans le workspace partage
 6. **`log_workspace_diagnostics`** — Log les chemins et verifie la coherence du symlink
-7. **`copy_optional_security_file`** — Copie `.security.yml` de `/share` vers `/data` si present. Ignore `config.override.json`
-8. **`write_launcher_config`** — Ecrit `launcher-config.json` dans le workspace partage (`{"port": 18800, "public": true}`)
+7. **`copy_optional_security_file`** — Compatibilite legacy : copie `/share/picoclaw/.security.yml` vers `/data` si present. Ignore `config.override.json`
+8. **`write_launcher_config`** — Cree `launcher-config.json` dans le workspace partage si absent, sans ecraser les modifications utilisateur
 9. **`write_runtime_config`** — Utilise `/share/picoclaw/workspace/config.full.json` comme source de verite si present, sinon seed depuis `raw_json_config`, puis normalise via `jq` :
    - Force `agents.defaults.workspace` = `/share/picoclaw/workspace`
    - Defaults `gateway.host` = `127.0.0.1`, `gateway.port` = `18790`
    - Force `tools.web.prefer_native` = `false` si absent
    - Auto-active les tools fichier + skills si absents
-   - Force `version = 1`, trie les cles
+   - Migre le JSON wrapper vers `version = 2`, trie les cles
 10. **`start_launcher`** — Configure les env vars, ancre `.security.yml` sur `/data/picoclaw`, detecte `gateway.log_level = "debug"`, lance `picoclaw-launcher` via `su-exec` (uid 1000)
 
 ---
@@ -110,12 +110,12 @@ Sequence executee au lancement du container :
 ├── workspace/                    ← Workspace de l'agent (AGENT.md, USER.md, TOOLS.md, skills/, etc.)
 │   ├── config.full.json          ← Config partagee editable utilisee par le launcher et le gateway
 │   └── launcher-config.json      ← Config launcher ecrite dans le meme dossier
-└── .security.yml                 ← Optionnel, copie vers /data au demarrage
+└── .security.yml                 ← Compat legacy uniquement
 
 /data/picoclaw/                   ← Gere par le add-on (pas d'acces direct utilisateur)
 ├── config.json → /share/picoclaw/workspace/config.full.json
 ├── launcher-config.json → /share/picoclaw/workspace/launcher-config.json
-├── .security.yml                 ← Copie depuis /share si present
+├── .security.yml                 ← Secrets runtime ancres hors workspace
 ├── .workspace-templates-bootstrapped  ← Marker : templates deja copies (1er demarrage)
 ├── workspace → /share/picoclaw/workspace  ← Symlink
 └── logs/                         ← Logs gateway
@@ -208,7 +208,7 @@ Exemple minimal (voir `picoclaw/examples/raw_json_config.example.json`) :
 ```
 
 **Normalisations automatiques par run.sh** (le user n'a pas besoin de les specifier) :
-- `version = 1` (force)
+- `version = 2` (force)
 - `agents.defaults.workspace` = `/share/picoclaw/workspace` (force, non overridable)
 - `gateway.host` = `127.0.0.1` (default si absent)
 - `gateway.port` = `18790` (default si absent/0)

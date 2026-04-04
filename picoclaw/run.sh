@@ -14,6 +14,9 @@ readonly RUNTIME_SECURITY_FILE="${RUNTIME_HOME}/.security.yml"
 readonly RUNTIME_LAUNCHER_CONFIG="${RUNTIME_HOME}/launcher-config.json"
 readonly RUNTIME_WORKSPACE_LINK="${RUNTIME_HOME}/workspace"
 readonly RUNTIME_WORKSPACE_TEMPLATES_MARKER="${RUNTIME_HOME}/.workspace-templates-bootstrapped"
+readonly RUNTIME_LOG_DIR="${RUNTIME_HOME}/logs"
+readonly RUNTIME_LAUNCHER_LOG="${RUNTIME_LOG_DIR}/launcher.log"
+readonly RUNTIME_GATEWAY_LOG="${RUNTIME_LOG_DIR}/gateway.log"
 
 readonly WORKSPACE_TEMPLATES_SOURCE="/usr/local/share/picoclaw/workspace"
 
@@ -48,7 +51,7 @@ count_top_level_entries() {
 }
 
 ensure_directories() {
-    mkdir -p "${SHARE_ROOT}" "${SHARED_WORKSPACE}" "${RUNTIME_HOME}"
+    mkdir -p "${SHARE_ROOT}" "${SHARED_WORKSPACE}" "${RUNTIME_HOME}" "${RUNTIME_LOG_DIR}"
     chown -R "${PICOCLAW_UID}:${PICOCLAW_GID}" "${SHARE_ROOT}" "${RUNTIME_HOME}"
 }
 
@@ -157,6 +160,13 @@ bootstrap_wrapper_workspace_files() {
 # Tool Preferences
 
 Use this file to customize how the agent should use tools in this workspace.
+This file is added to the system prompt.
+
+The exact tool definitions currently visible to the LLM are exported separately in:
+
+- `TOOLS.injected.json`
+
+That generated JSON file contains the real tool names, descriptions, and JSON Schemas.
 
 ## Example preferences
 
@@ -172,6 +182,15 @@ EOF
         chmod 644 "${SHARED_WORKSPACE}/TOOLS.md"
         chown "${PICOCLAW_UID}:${PICOCLAW_GID}" "${SHARED_WORKSPACE}/TOOLS.md"
         bashio::log.info "Created workspace template ${SHARED_WORKSPACE}/TOOLS.md"
+    fi
+
+    if [ ! -e "${SHARED_WORKSPACE}/TOOLS.injected.json" ]; then
+        cat > "${SHARED_WORKSPACE}/TOOLS.injected.json" <<'EOF'
+[]
+EOF
+        chmod 644 "${SHARED_WORKSPACE}/TOOLS.injected.json"
+        chown "${PICOCLAW_UID}:${PICOCLAW_GID}" "${SHARED_WORKSPACE}/TOOLS.injected.json"
+        bashio::log.info "Created generated tools placeholder ${SHARED_WORKSPACE}/TOOLS.injected.json"
     fi
 
     if [ ! -e "${SHARED_WORKSPACE}/HEARTBEAT.md" ]; then
@@ -246,6 +265,21 @@ copy_optional_security_file() {
 }
 
 write_launcher_config() {
+    local normalized_launcher
+
+    if [ -f "${SHARED_LAUNCHER_CONFIG}" ]; then
+        if jq -e 'type == "object"' "${SHARED_LAUNCHER_CONFIG}" >/dev/null 2>&1; then
+            normalized_launcher="$(jq --sort-keys '.port = 18800 | .public = true' "${SHARED_LAUNCHER_CONFIG}")"
+            printf '%s\n' "${normalized_launcher}" > "${SHARED_LAUNCHER_CONFIG}"
+            chmod 600 "${SHARED_LAUNCHER_CONFIG}"
+            chown "${PICOCLAW_UID}:${PICOCLAW_GID}" "${SHARED_LAUNCHER_CONFIG}"
+            return
+        else
+            bashio::log.warning "Invalid ${SHARED_LAUNCHER_CONFIG}; recreating it with Home Assistant defaults."
+            rm -f "${SHARED_LAUNCHER_CONFIG}"
+        fi
+    fi
+
     cat > "${SHARED_LAUNCHER_CONFIG}" <<'EOF'
 {
   "port": 18800,
@@ -254,6 +288,36 @@ write_launcher_config() {
 EOF
     chmod 600 "${SHARED_LAUNCHER_CONFIG}"
     chown "${PICOCLAW_UID}:${PICOCLAW_GID}" "${SHARED_LAUNCHER_CONFIG}"
+}
+
+prepare_runtime_log_files() {
+    install -d -m 755 -o "${PICOCLAW_UID}" -g "${PICOCLAW_GID}" "${RUNTIME_LOG_DIR}"
+    install -m 644 -o "${PICOCLAW_UID}" -g "${PICOCLAW_GID}" /dev/null "${RUNTIME_LAUNCHER_LOG}"
+    install -m 644 -o "${PICOCLAW_UID}" -g "${PICOCLAW_GID}" /dev/null "${RUNTIME_GATEWAY_LOG}"
+}
+
+relay_runtime_log_file() {
+    local label file_path
+
+    label="$1"
+    file_path="$2"
+
+    (
+        tail -n 0 -F "${file_path}" 2>/dev/null |
+            while IFS= read -r line; do
+                case "${line}" in
+                    *"Gateway health status: 200"*)
+                        continue
+                        ;;
+                esac
+                printf '[%s] %s\n' "${label}" "${line}"
+            done
+    ) &
+}
+
+start_runtime_log_relays() {
+    relay_runtime_log_file "launcher" "${RUNTIME_LAUNCHER_LOG}"
+    relay_runtime_log_file "gateway" "${RUNTIME_GATEWAY_LOG}"
 }
 
 normalize_config_json() {
@@ -278,9 +342,11 @@ normalize_config_json() {
                 .channels.onebot.access_token,
                 .channels.wecom.secret,
                 .channels.pico.token,
+                .channels.pico_client.token,
                 .channels.irc.password,
                 .channels.irc.nickserv_password,
                 .channels.irc.sasl_password,
+                .channels.vk.token,
                 .tools.web.brave.api_key,
                 .tools.web.brave.api_keys,
                 .tools.web.tavily.api_key,
@@ -298,13 +364,45 @@ normalize_config_json() {
             if getpath(path) == null or getpath(path) == "" then setpath(path; value) else . end;
         def ensure_default_port(path; value):
             if getpath(path) == null or getpath(path) == 0 then setpath(path; value) else . end;
+        def migrate_model_enabled:
+            .model_list = (
+                (.model_list // []) | map(
+                    if (.enabled == null or .enabled == false) and (
+                        ((.api_keys // []) | length) > 0 or
+                        ((.api_key // "") != "") or
+                        (.model_name // "") == "local-model"
+                    ) then
+                        .enabled = true
+                    else
+                        .
+                    end
+                )
+            );
+        def migrate_channel_configs:
+            .channels = (.channels // {}) |
+            .channels.discord = (.channels.discord // {}) |
+            .channels.discord.group_trigger = (.channels.discord.group_trigger // {}) |
+            .channels.onebot = (.channels.onebot // {}) |
+            .channels.onebot.group_trigger = (.channels.onebot.group_trigger // {}) |
+            if (.channels.discord.mention_only // false) and (.channels.discord.group_trigger.mention_only // false | not) then
+                .channels.discord.group_trigger.mention_only = true
+            else
+                .
+            end |
+            if ((.channels.onebot.group_trigger_prefix // []) | length) > 0 and ((.channels.onebot.group_trigger.prefixes // []) | length) == 0 then
+                .channels.onebot.group_trigger.prefixes = .channels.onebot.group_trigger_prefix
+            else
+                .
+            end;
         scrub_secrets |
-        .version = 1 |
+        .version = 2 |
         .agents = (.agents // {}) |
         .agents.defaults = (.agents.defaults // {}) |
         .gateway = (.gateway // {}) |
         .tools = (.tools // {}) |
         .tools.web = (.tools.web // {}) |
+        migrate_model_enabled |
+        migrate_channel_configs |
         .agents.defaults.workspace = $workspace |
         ensure_default(["gateway", "host"]; "127.0.0.1") |
         ensure_default_port(["gateway", "port"]; 18790) |
@@ -392,6 +490,7 @@ extract_embedded_security_json() {
                 "onebot": (if (.channels.onebot.access_token? // "") != "" then {"access_token": .channels.onebot.access_token} else null end),
                 "wecom": (if (.channels.wecom.secret? // "") != "" then {"secret": .channels.wecom.secret} else null end),
                 "pico": (if (.channels.pico.token? // "") != "" then {"token": .channels.pico.token} else null end),
+                "pico_client": (if (.channels.pico_client.token? // "") != "" then {"token": .channels.pico_client.token} else null end),
                 "irc": (
                     if (.channels.irc.password? // "") != "" or (.channels.irc.nickserv_password? // "") != "" or (.channels.irc.sasl_password? // "") != "" then
                         {
@@ -402,7 +501,8 @@ extract_embedded_security_json() {
                     else
                         null
                     end
-                )
+                ),
+                "vk": (if (.channels.vk.token? // "") != "" then {"token": .channels.vk.token} else null end)
             },
             "web": {
                 "brave": (
@@ -504,9 +604,11 @@ start_launcher() {
         bashio::log.info "Gateway debug mode requested through the shared config. The launcher will start PicoClaw with detailed gateway logs enabled."
     fi
 
+    prepare_runtime_log_files
+    start_runtime_log_relays
+
     exec su-exec "${PICOCLAW_UID}:${PICOCLAW_GID}" \
         /usr/local/bin/picoclaw-launcher \
-        -console \
         -no-browser \
         -lang en \
         -public \

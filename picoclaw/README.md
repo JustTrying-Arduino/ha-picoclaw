@@ -62,10 +62,10 @@ The add-on uses one Home Assistant option only:
 - `raw_json_config`
 
 The wrapper always forces the workspace to `/share/picoclaw/workspace` and injects safe file/skill defaults if those tool blocks are absent.
-On first boot, `raw_json_config` seeds `/share/picoclaw/workspace/config.full.json`; after that, the shared file becomes the editable source of truth used by the launcher and gateway. Secrets stay in `.security.yml`, not in `config.full.json`.
+On first boot, `raw_json_config` seeds `/share/picoclaw/workspace/config.full.json`; after that, the shared file becomes the editable source of truth used by the launcher and gateway. Secrets stay in `/data/picoclaw/.security.yml`, not in `config.full.json`.
 
 Builtin skills are copied into `/share/picoclaw/workspace/skills` on first boot so they are visible from Home Assistant File Editor. Removing a skill folder from that shared directory disables it for the add-on.
-The wrapper also bootstraps the standard top-level workspace files into `/share/picoclaw/workspace`, and adds wrapper-managed files such as `TOOLS.md` and `HEARTBEAT.md`, so the main PicoClaw markdown files are available from Home Assistant too.
+The wrapper also bootstraps the standard top-level workspace files into `/share/picoclaw/workspace`, and adds wrapper-managed files such as `TOOLS.md`, `TOOLS.injected.json`, and `HEARTBEAT.md`, so the main PicoClaw markdown files are available from Home Assistant too. `TOOLS.md` is for your custom prompt instructions; `TOOLS.injected.json` is the generated view of the exact tool names, descriptions, and JSON Schemas currently visible to the LLM.
 
 Use the example config here:
 

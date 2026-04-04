@@ -75,6 +75,7 @@ What to expect in the shared workspace after PicoClaw initializes:
 - `USER.md`
 - `HEARTBEAT.md`
 - `TOOLS.md`
+- `TOOLS.injected.json`
 - `SOUL.md`
 - `memory/`
 - `skills/`
@@ -86,7 +87,12 @@ If you inspect `/data/picoclaw/workspace`, that path should resolve to the same 
 
 Builtin skills shipped by upstream are copied into `/share/picoclaw/workspace/skills` on first boot. This makes them visible from Home Assistant File Editor and allows you to disable one by deleting its folder from the shared workspace.
 
-The wrapper also bootstraps top-level workspace files into `/share/picoclaw/workspace`. Upstream provides files such as `AGENT.md`, `USER.md`, and `SOUL.md`; the Home Assistant wrapper additionally ensures `TOOLS.md` and `HEARTBEAT.md` are present even when upstream did not pre-create them.
+The wrapper also bootstraps top-level workspace files into `/share/picoclaw/workspace`. Upstream provides files such as `AGENT.md`, `USER.md`, and `SOUL.md`; the Home Assistant wrapper additionally ensures `TOOLS.md`, `TOOLS.injected.json`, and `HEARTBEAT.md` are present even when upstream did not pre-create them.
+
+Use them like this:
+
+- `TOOLS.md`: your custom tool-usage instructions for the system prompt
+- `TOOLS.injected.json`: the exact tools currently visible to the LLM, including names, descriptions, and JSON Schemas
 
 ## Configuration Contract
 
@@ -100,7 +106,7 @@ Rules:
 - it must parse to a JSON object
 - if `/share/picoclaw/workspace/config.full.json` is missing, the wrapper seeds it from `raw_json_config`
 - on every boot, the wrapper normalizes `/share/picoclaw/workspace/config.full.json`
-- sensitive values are kept in `/data/picoclaw/.security.yml` (or seeded from `/share/picoclaw/.security.yml`), not in `config.full.json`
+- sensitive values are kept in `/data/picoclaw/.security.yml`, not in `config.full.json`
 - on every boot, the wrapper forces `agents.defaults.workspace` to `/share/picoclaw/workspace`
 - if the HA-safe file and skill tools are absent, the wrapper injects them automatically
 
@@ -207,7 +213,7 @@ Why `:18800` is not the supported access path in HA:
 
 ## Optional `.security.yml`
 
-If `/share/picoclaw/.security.yml` exists, the wrapper copies it to `/data/picoclaw/.security.yml` during startup.
+If `/share/picoclaw/.security.yml` exists, the wrapper still copies it to `/data/picoclaw/.security.yml` during startup for backward compatibility.
 
 This keeps compatibility with upstream secret separation without adding a second Home Assistant config surface in v1.
 
@@ -273,7 +279,7 @@ In the Home Assistant wrapper, `gateway.log_level = "debug"` has an extra meanin
 
 - it keeps the upstream debug log level
 - it also starts `picoclaw gateway` with `-d --no-truncate`
-- gateway subprocess logs are relayed into the add-on console logs
+- launcher and gateway logs are relayed into the add-on console logs
 - the wrapper still suppresses the recurring `Gateway health status: 200` noise line
 - inline tool feedback messages are still hidden in Telegram chats even though tool calls remain visible in the add-on logs
 

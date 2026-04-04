@@ -3,5 +3,5 @@ build_from:
   aarch64: ghcr.io/home-assistant/aarch64-base:3.22
   armv7: ghcr.io/home-assistant/armv7-base:3.22
 args:
-  PICOCLAW_VERSION: v0.2.4
-  PICOCLAW_WRAPPER_VERSION: v0.2.4-ha.10
+  PICOCLAW_VERSION: v0.2.5
+  PICOCLAW_WRAPPER_VERSION: v0.2.5-ha.1

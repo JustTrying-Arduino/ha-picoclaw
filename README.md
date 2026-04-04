@@ -55,6 +55,7 @@ This means you can tune every aspect of the agent's behaviour from within HA:
 | `USER.md` | Who the agent thinks it's talking to — your preferences, context, habits |
 | `AGENT.md` · `SOUL.md` | The agent's main persona, behavior, and values |
 | `TOOLS.md` | Workspace-specific rules and preferences for tool usage |
+| `TOOLS.injected.json` | Exact tool definitions currently visible to the LLM: names, descriptions, and JSON Schemas |
 | `HEARTBEAT.md` | Periodic self-reflection prompts |
 | `config.full.json` | The full editable shared PicoClaw config used by the add-on |
 | `skills/` | Add, edit, or disable agent skills (remove a folder to disable) |
@@ -94,7 +95,7 @@ No terminal, no Docker, no manual file mounting — everything stays inside Home
 ## Configuration Examples
 
 The add-on exposes a single option: `raw_json_config`. On first boot, the wrapper uses it to seed `/share/picoclaw/workspace/config.full.json`, then that shared file becomes the editable source of truth used by the launcher and gateway.
-Sensitive values are kept out of `config.full.json`; use the launcher UI or `/share/picoclaw/.security.yml` for secrets.
+Sensitive values are kept out of `config.full.json`; runtime secrets live in `/data/picoclaw/.security.yml`.
 
 > You don't need to specify workspace paths, file tools, or skill tools — the wrapper injects them automatically if missing.
 
@@ -216,9 +217,9 @@ Add this to `raw_json_config` before first boot, or to `/share/picoclaw/workspac
 }
 ```
 
-This enables verbose logging in the HA add-on logs: gateway traffic, prompts, tool calls, cron activity, heartbeat activity, and non-truncated output. The wrapper still suppresses the noisy recurring `Gateway health status: 200` line.
+This enables verbose logging in the HA add-on logs: launcher activity, gateway traffic, prompts, tool calls, cron activity, heartbeat activity, and non-truncated output. The wrapper still suppresses the noisy recurring `Gateway health status: 200` line.
 
-For optional security configuration, place a `.security.yml` file in `/share/picoclaw/` — the wrapper copies it to the runtime directory at each startup.
+For normal operation, keep secrets in `/data/picoclaw/.security.yml`. A legacy `/share/picoclaw/.security.yml` is still imported at startup for backward compatibility, but it is no longer the preferred location.
 
 ---
 
@@ -240,7 +241,7 @@ The wrapper applies a single small patch on the upstream code (for Ingress compa
   workspace/                      <-- Agent workspace (AGENT.md, USER.md, TOOLS.md, config.full.json, ...)
   workspace/config.full.json      <-- Full normalized shared config used by the add-on
   workspace/launcher-config.json  <-- Launcher web settings managed by the wrapper/UI
-  .security.yml                   <-- Optional, copied to runtime at startup
+  .security.yml                   <-- Legacy compatibility only
 
 /data/picoclaw/                   <-- Managed by the add-on (not user-facing)
   config.json                     <-- Symlink to workspace/config.full.json
