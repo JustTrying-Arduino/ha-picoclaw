@@ -606,7 +606,7 @@ new file mode 100644
 index 0000000..a1b2c3d
 --- /dev/null
 +++ b/web/frontend/src/lib/runtime.ts
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,30 @@
 +declare global {
 +  interface Window {
 +    __PICOCLAW_BASE_PATH__?: string
