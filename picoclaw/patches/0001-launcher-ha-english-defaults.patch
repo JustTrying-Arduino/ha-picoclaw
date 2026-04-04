@@ -601,6 +601,42 @@ index 7e92fca..295b083 100644
  		p := canonicalAuthPath(r.URL.Path)
  		if handled := tryLauncherQueryTokenLogin(w, r, p, cfg); handled {
  			return
+diff --git a/web/frontend/src/lib/runtime.ts b/web/frontend/src/lib/runtime.ts
+new file mode 100644
+index 0000000..a1b2c3d
+--- /dev/null
++++ b/web/frontend/src/lib/runtime.ts
+@@ -0,0 +1,29 @@
++declare global {
++  interface Window {
++    __PICOCLAW_BASE_PATH__?: string
++  }
++}
++
++function getBasePath(): string {
++  if (typeof window !== "undefined" && window.__PICOCLAW_BASE_PATH__) {
++    return window.__PICOCLAW_BASE_PATH__
++  }
++  return ""
++}
++
++export function withBasePath(path: string): string {
++  const base = getBasePath()
++  if (!base) return path
++  if (path.startsWith(base)) return path
++  return base + path
++}
++
++export function stripBasePath(path: string): string {
++  const base = getBasePath()
++  if (!base) return path
++  if (path.startsWith(base)) return path.slice(base.length) || "/"
++  return path
++}
++
++export function getRouterBasePath(): string {
++  return getBasePath() || "/"
++}
 diff --git a/web/frontend/src/api/http.ts b/web/frontend/src/api/http.ts
 index 0eb872f..4926b5b 100644
 --- a/web/frontend/src/api/http.ts
