@@ -212,6 +212,7 @@ Exemple minimal (voir `picoclaw/examples/raw_json_config.example.json`) :
 - `agents.defaults.workspace` = `/share/picoclaw/workspace` (force, non overridable)
 - `gateway.host` = `127.0.0.1` (default si absent)
 - `gateway.port` = `18790` (default si absent/0)
+- `gateway.log_level` = `info` (default si absent)
 - `tools.web.prefer_native` = `false` (default si absent — desactive le mode natif du tool web)
 - Tools fichier (`list_dir`, `read_file`, `write_file`, `append_file`, `edit_file`) et skills (`skills`, `find_skills`, `install_skill`) : auto-actives si absents
 

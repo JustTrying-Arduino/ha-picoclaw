@@ -261,29 +261,43 @@ picoclaw agent -m "hello"
 
 The add-on runtime always launches the web launcher in the foreground. Running commands manually is only for troubleshooting.
 
-## Debugging
+## Gateway Log Levels
 
-By default, the add-on keeps logs fairly quiet.
+The wrapper defaults `gateway.log_level` to `info` if not set.
 
-If you want to see inbound and outbound traffic, prompts, tool calls, and non-truncated gateway output in the Home Assistant add-on logs, set this in `raw_json_config`:
+Set the level in `/share/picoclaw/workspace/config.full.json` or in the HA `raw_json_config` option:
 
 ```json
 {
   "gateway": {
-    "log_level": "debug"
+    "log_level": "info"
   }
 }
 ```
 
+### What each level shows
+
+| Level | What you see |
+|-------|-------------|
+| **info** (default) | Message routed, tool calls requested, tool execution with arguments preview, agent response preview, outbound message published, model routing decisions, heartbeat start/stop, steering events |
+| **debug** | Everything from `info`, plus: full LLM request/response payloads, heartbeat execution details, tool results sent to user, model routing internals, message bus diagnostics |
+| **warn** | Only warnings and errors: failed tool calls, context compression issues, steering failures, hook errors |
+
+### Recommended usage
+
+- **`info`**: day-to-day monitoring. Shows the full agent flow (message in -> tool calls -> response out) without overwhelming volume.
+- **`debug`**: troubleshooting only. Includes raw LLM payloads which can be very large. Use temporarily when diagnosing a specific issue.
+
+### Extra behavior when `debug` is set
+
 In the Home Assistant wrapper, `gateway.log_level = "debug"` has an extra meaning:
 
-- it keeps the upstream debug log level
-- it also starts `picoclaw gateway` with `-d --no-truncate`
+- it starts `picoclaw gateway` with `-d --no-truncate`
 - launcher and gateway logs are relayed into the add-on console logs
 - the wrapper still suppresses the recurring `Gateway health status: 200` noise line
 - inline tool feedback messages are still hidden in Telegram chats even though tool calls remain visible in the add-on logs
 
-Recommended debug flow:
+### Recommended debug flow
 
 1. Set `gateway.log_level` to `debug`.
 2. Restart the add-on.

@@ -406,6 +406,7 @@ normalize_config_json() {
         .agents.defaults.workspace = $workspace |
         ensure_default(["gateway", "host"]; "127.0.0.1") |
         ensure_default_port(["gateway", "port"]; 18790) |
+        ensure_default(["gateway", "log_level"]; "info") |
         if .tools.web.prefer_native == null then .tools.web.prefer_native = false else . end |
         ensure_enabled(["tools", "skills", "enabled"]) |
         ensure_enabled(["tools", "find_skills", "enabled"]) |
