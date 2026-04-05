@@ -94,6 +94,35 @@ Use them like this:
 - `TOOLS.md`: your custom tool-usage instructions for the system prompt
 - `TOOLS.injected.json`: the exact tools currently visible to the LLM, including names, descriptions, and JSON Schemas
 
+## Backups
+
+Home Assistant backups store add-on data from two separate locations. Both must be included to get a complete PicoClaw backup.
+
+### What lives where
+
+| Path | Backup option | Contents |
+|------|--------------|----------|
+| `/data/picoclaw/` | **Add-on data** (included when PicoClaw is checked in the backup) | `.security.yml` (API keys and secrets), workspace symlink, template markers, logs |
+| `/share/picoclaw/` | **Share folder** (separate checkbox in backup settings) | The entire workspace: `config.full.json`, `AGENT.md`, `USER.md`, `HEARTBEAT.md`, conversation sessions, long-term memory, skills, cron jobs |
+
+### Important
+
+The Share folder contains everything that makes your agent unique: its configuration, personality, conversation history, memory, and skills. If you only back up the add-on data without the Share folder, you lose all of that and only keep the secrets file.
+
+Always enable **both**:
+
+1. Check **PicoClaw** in the add-on list when creating a backup.
+2. Check **Share** in the folder list.
+
+### Restoring
+
+After restoring a backup:
+
+1. The wrapper re-creates symlinks and runtime directories automatically on startup.
+2. `.security.yml` is restored from `/data/picoclaw/`, so API keys are preserved.
+3. The workspace in `/share/picoclaw/workspace/` is restored as-is, including sessions and memory.
+4. No manual steps are needed. Start the add-on normally.
+
 ## Configuration Contract
 
 This add-on exposes one option only:
