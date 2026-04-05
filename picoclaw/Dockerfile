@@ -72,7 +72,7 @@ LABEL \
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
-RUN apk add --no-cache bash jq su-exec tzdata ca-certificates
+RUN apk add --no-cache bash jq su-exec tzdata ca-certificates python3 py3-pip
 
 RUN addgroup -S picoclaw && adduser -S -D -H -h /data/picoclaw -G picoclaw picoclaw
 

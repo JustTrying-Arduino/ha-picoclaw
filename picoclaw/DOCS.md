@@ -260,6 +260,24 @@ Power-user shell tool:
 
 The TUI is installed in the image and available from an interactive shell into the add-on container, but it is not embedded into the Home Assistant frontend.
 
+## Python Runtime
+
+The container includes `python3` and `pip`. This allows the agent to create and execute Python scripts from the workspace via the `exec` tool.
+
+Python is not running as a service — it is only invoked on demand when the agent needs it. Typical use cases:
+
+- data processing (CSV, JSON transformation, statistics)
+- structured API calls that are difficult with shell alone
+- any computation the LLM cannot do natively
+
+To install a Python package from inside the agent:
+
+```
+pip install <package>
+```
+
+Installed packages do not persist across add-on rebuilds. If you need permanent packages, add them to the Dockerfile.
+
 ## English-First Behavior
 
 The wrapper forces an English-first launcher experience by:
