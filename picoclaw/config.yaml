@@ -1,5 +1,5 @@
 name: PicoClaw
-version: v0.2.5-ha.3
+version: v0.2.5-ha.4
 slug: picoclaw
 description: Home Assistant wrapper for the official PicoClaw launcher and gateway
 url: https://github.com/JustTrying-Arduino/ha-picoclaw
